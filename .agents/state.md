@@ -28,7 +28,9 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master` (no rem
   Owner review round 1 (2026-10-21) landed: Excel-like rows (row 1 in the grid, letters-only
   header strip, optional frozen top row), autofit over the selection for columns and rows with
   adjustable row heights, and row/column operations defined on exactly the selected rows and
-  columns with descriptive menu labels (see the plan's review section).
+  columns with descriptive menu labels (see the plan's review section). Round 1b: selection
+  happens on mouse down with that press's modifiers (Ctrl released before the button no longer
+  drops the added range); inserts land at every selected run.
   Next action: the owner re-tests (`cargo run --release -p csv-editor -- <file.csv>`) and reports
   the next round; follow-ups are listed at the end of the plan.
 

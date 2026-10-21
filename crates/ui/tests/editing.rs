@@ -234,9 +234,10 @@ fn click_cell(h: &mut Harness<'_, EditorApp>, row: usize, col: usize, modifiers:
     h.input_mut().events.push(Event::PointerMoved(pos));
     h.input_mut().events.push(Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers });
     h.step();
-    h.input_mut().events.push(Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
-    h.step();
+    // A real hand often lets go of Ctrl before the mouse button: the press must have decided.
     h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.input_mut().events.push(Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.step();
     h.run();
 }
 

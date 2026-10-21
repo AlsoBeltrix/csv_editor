@@ -9,7 +9,9 @@
 use std::rc::Rc;
 
 use csv_editor_table::{CellRef, Range, Row, Selection, column_label, selection};
-use egui::{Align2, Color32, CursorIcon, Event, EventFilter, Key, Modifiers, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
+use egui::{
+    Align2, Color32, CursorIcon, Event, EventFilter, Key, Modifiers, PointerButton, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Vec2, pos2, vec2,
+};
 
 use crate::EditorApp;
 use crate::theme::{self, Tokens};
@@ -622,7 +624,6 @@ fn autofit_targets(view: &DocView, index: usize, by_rows: bool) -> Vec<usize> {
 }
 
 fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &Response, geo: &Geo) {
-    let mods = ui.input(|i| i.modifiers);
     let max = view.max_cell();
     let clamp = |c: CellRef| CellRef::new(c.row.min(max.row), c.col.min(max.col));
     let in_head = |p: Pos2| p.y < geo.cells.top() && p.x >= geo.cells.left();
@@ -659,20 +660,27 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
         }
     }
 
-    let press = if resp.drag_started() {
-        ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
-    } else if resp.clicked() || resp.secondary_clicked() {
-        resp.interact_pointer_pos()
-    } else {
-        None
-    };
-    if let Some(p) = press {
+    // Selection happens on mouse *down*, with the modifiers held at that moment (a spreadsheet
+    // selects on press; deciding at release loses the Ctrl of a hand that lets go of the key
+    // first). The press is read from the raw events so its modifiers are the ones that count.
+    let press = ui.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            Event::PointerButton { pos, button, pressed: true, modifiers }
+                if matches!(button, PointerButton::Primary | PointerButton::Secondary) && geo.rect.contains(*pos) =>
+            {
+                Some((*pos, *button, *modifiers))
+            }
+            _ => None,
+        })
+    });
+    let press = press.filter(|_| resp.contains_pointer() || resp.hovered() || resp.is_pointer_button_down_on());
+    if let Some((p, button, mods)) = press {
         commit_edit(grid, view);
         resp.request_focus();
-        let dragging = resp.drag_started();
+        grid.drag = None;
         // A right-click outside the selection selects what is under it (cell, row or column);
         // inside, it keeps the selection. Where it landed decides the context menu.
-        if resp.secondary_clicked() {
+        if button == PointerButton::Secondary {
             if in_head(p) {
                 grid.context_zone = Zone::Head;
                 if let Some(c) = geo.col_at(p.x) {
@@ -701,36 +709,33 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
             }
             return;
         }
+        // What a drag from here would do is decided now; it only takes effect if the pointer
+        // moves far enough for egui to call it a drag.
         if in_corner(p) {
             let all = Range::new(CellRef::default(), max);
             view.sel = Selection { active: CellRef::default(), anchor: CellRef::default(), ranges: vec![all] };
-            grid.drag = None;
         } else if in_head(p) {
             if let Some(col) = geo.col_edge_at(p.x) {
-                if dragging {
-                    grid.drag = Some(Drag::ColResize { col, start_x: p.x, start_w: col_width(grid, view, col) });
-                }
+                grid.drag = Some(Drag::ColResize { col, start_x: p.x, start_w: col_width(grid, view, col) });
             } else if let Some(c) = geo.col_at(p.x) {
                 let c = c.min(max.col);
                 let top = CellRef::new(0, c);
                 pick(view, Range::new(top, CellRef::new(max.row, c)), top, CellRef::new(max.row, c), mods);
-                grid.drag = dragging.then_some(Drag::Cols);
+                grid.drag = Some(Drag::Cols);
             }
         } else if in_gutter(p) {
             if let Some(row) = geo.row_edge_at(p.y) {
-                if dragging {
-                    grid.drag = Some(Drag::RowResize { row, start_y: p.y, start_h: row_height(grid, view, row) });
-                }
+                grid.drag = Some(Drag::RowResize { row, start_y: p.y, start_h: row_height(grid, view, row) });
             } else if let Some(r) = geo.row_at(p.y) {
                 let r = r.min(max.row);
                 let left = CellRef::new(r, 0);
                 pick(view, Range::new(left, CellRef::new(r, max.col)), left, CellRef::new(r, max.col), mods);
-                grid.drag = dragging.then_some(Drag::Rows);
+                grid.drag = Some(Drag::Rows);
             }
         } else if let Some(c) = geo.cell_at(p) {
             let c = clamp(c);
             pick(view, Range::cell(c), c, c, mods);
-            grid.drag = dragging.then_some(Drag::Cells);
+            grid.drag = Some(Drag::Cells);
         }
     }
 
@@ -778,7 +783,7 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
             ui.ctx().request_repaint();
         }
     }
-    if resp.drag_stopped() {
+    if resp.drag_stopped() || ui.input(|i| i.pointer.any_released()) {
         grid.drag = None;
     }
 

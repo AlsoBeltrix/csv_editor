@@ -156,6 +156,10 @@ Findings from the owner's first hands-on session and how they were resolved:
    whole columns are selected and vice versa. Insert adds blank rows (columns) at *each* run of
    selected rows (columns), as many as the run has, as Excel does. A headless test drives a real
    Ctrl+click through the grid and checks delete, delete columns and insert on the result.
+   Root cause of the owner's report: selection was decided at mouse *release* with the modifiers
+   held then; a hand that lets go of Ctrl first made the click plain and replaced the selection.
+   Selection now happens on mouse down with that event's modifiers, as in a spreadsheet; the
+   test releases Ctrl before the button and fails against the old code.
 
 ## Follow-ups (not started)
 
