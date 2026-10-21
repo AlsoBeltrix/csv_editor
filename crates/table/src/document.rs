@@ -17,18 +17,21 @@ pub struct Document {
     pub dialect: Dialect,
     pub history: History,
     pub path: Option<PathBuf>,
+    /// The dialect as last read or written: a changed dialect makes the document dirty too.
+    saved_dialect: Dialect,
 }
 
 impl Document {
     /// An empty, unnamed document with no header row yet. The interface shows blank cells past
     /// the table's extent and grows the table when one is edited, so nothing blank is written.
     pub fn new() -> Document {
-        Document { dialect: Dialect { header: false, ..Dialect::default() }, ..Document::default() }
+        let dialect = Dialect { header: false, ..Dialect::default() };
+        Document { dialect, saved_dialect: dialect, ..Document::default() }
     }
 
     pub fn from_bytes(bytes: &[u8], opts: &ParseOptions) -> Result<Document, Error> {
         let (table, dialect) = parse(bytes, opts)?;
-        Ok(Document { table, dialect, history: History::default(), path: None })
+        Ok(Document { table, dialect, history: History::default(), path: None, saved_dialect: dialect })
     }
 
     pub fn open(path: impl AsRef<Path>, opts: &ParseOptions) -> Result<Document, Error> {
@@ -45,7 +48,13 @@ impl Document {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.history.is_dirty()
+        self.history.is_dirty() || self.dialect_changed()
+    }
+
+    /// Whether the dialect differs from the saved one in a way that changes the file. The header
+    /// flag only changes how the grid shows the first row, so it does not count.
+    pub fn dialect_changed(&self) -> bool {
+        Dialect { header: self.dialect.header, ..self.saved_dialect } != self.dialect
     }
 
     pub fn to_bytes(&self) -> (Vec<u8>, usize) {
@@ -69,6 +78,7 @@ impl Document {
         }
         self.path = Some(path.to_path_buf());
         self.history.mark_saved();
+        self.saved_dialect = self.dialect;
         Ok(lossy)
     }
 
@@ -255,6 +265,22 @@ mod tests {
         assert!(doc.is_dirty());
         let missing = Document::open(dir.join("missing.csv"), &ParseOptions::default());
         assert!(matches!(missing, Err(Error::Io { .. })));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_changed_dialect_dirties_the_document_until_saved() {
+        let dir = std::env::temp_dir().join(format!("csv-editor-dialect-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut d = doc("a,b\n1,2\n");
+        d.dialect.header = !d.dialect.header;
+        assert!(!d.is_dirty(), "the header flag is a view setting");
+        d.dialect.delimiter = b';';
+        assert!(d.is_dirty() && d.dialect_changed());
+        let path = dir.join("d.csv");
+        d.save_to(&path).unwrap();
+        assert!(!d.is_dirty());
+        assert_eq!(std::fs::read(&path).unwrap(), b"a;b\n1;2\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

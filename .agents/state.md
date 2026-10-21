@@ -5,7 +5,7 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master` (no rem
 ## Now
 
 - **CSV editor — implementing the approved plan** (`.agents/plans/csv-editor.md`, approved
-  2026-10-21). Slices 1–6 landed 2026-10-21: Cargo workspace (`crates/table`, `crates/ui`,
+  2026-10-21). Slices 1–7 landed 2026-10-21: Cargo workspace (`crates/table`, `crates/ui`,
   `apps/csv-editor`), eframe shell with the Windows graphics probe, table model with CSV
   sniff/parse/write, inverse-edit undo, document open/save, selection model, and the read-only
   grid (virtualized, own scrollbars, selection with mouse and keyboard, column resize/autofit,
@@ -18,10 +18,13 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master` (no rem
   moves as one undo step), find/replace (Ctrl+F/H bar with case, whole-cell and regex options
   and a scope of everywhere/selection/column), sort (Data menu: natural text or numeric, either
   direction, header row kept, one undo step) and row filters (per column: contains, equals,
-  blank…; a view the grid scrolls through, hidden rows skipped by arrows and find).
+  blank…; a view the grid scrolls through, hidden rows skipped by arrows and find), cleanup
+  tools (Data menu: trim whitespace, change case, remove empty rows/columns, remove duplicate
+  rows; results shown in the status bar), the delimiter-and-encoding dialog (File menu and the
+  toolbar badge; a changed dialect counts as unsaved) and Go to row (Ctrl+G).
   Verification entry point (see `.agents/repo-guidance.md`) passes.
-  Next action: slice 7 (cleanup tools: trim, drop empty rows/columns, dedupe, change case, go
-  to row; dialect dialog for delimiter/quote/line ending/encoding/quoting/header).
+  Next action: slice 8 (polish: persisted prefs and recent files, large-file soak with a
+  synthetic 100 MB file, shortcut audit, about dialog, context menus review).
 
 ## Facts
 

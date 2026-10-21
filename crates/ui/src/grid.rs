@@ -35,6 +35,11 @@ pub struct GridState {
     pub filter_request: Option<usize>,
     /// Scroll so the active cell is in view on the next frame (set by find, sort, filters).
     pub scroll_to_active: bool,
+    /// Requests for the app's dialogs: the dialect (delimiter and encoding) and go-to-row.
+    pub dialect_request: bool,
+    pub goto_request: bool,
+    /// A short result to show in the status bar ("3 rows removed"), picked up by the app.
+    pub note: Option<String>,
     /// The last copied or cut block, kept as cells so a paste within the editor is exact.
     pub clip: Option<Clip>,
     /// Reads the system clipboard, for the menu's Paste (Ctrl+V arrives as an egui event).
@@ -88,6 +93,9 @@ impl Default for GridState {
             paste_text: None,
             filter_request: None,
             scroll_to_active: false,
+            dialect_request: false,
+            goto_request: false,
+            note: None,
         }
     }
 }

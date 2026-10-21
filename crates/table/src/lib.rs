@@ -3,6 +3,7 @@
 //! Every cell is text. Nothing here knows about egui: this crate is the part that is unit-tested
 //! exhaustively and could sit under any interface. See `.agents/plans/csv-editor.md`.
 
+pub mod cleanup;
 pub mod dialect;
 pub mod document;
 pub mod edit;
@@ -13,6 +14,7 @@ pub mod sort;
 pub mod table;
 pub mod text;
 
+pub use cleanup::Case;
 pub use dialect::{Dialect, Encoding, LineEnding, Quoting};
 pub use document::Document;
 pub use edit::{Edit, History};

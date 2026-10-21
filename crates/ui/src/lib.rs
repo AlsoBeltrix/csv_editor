@@ -10,7 +10,7 @@ pub mod view;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use csv_editor_table::{Document, ParseOptions};
+use csv_editor_table::{Dialect, Document, Encoding, LineEnding, ParseOptions, Quoting};
 use egui::{Id, Key, Modifiers, ViewportCommand};
 use theme::Tokens;
 pub use view::{DocView, Filter, FilterKind};
@@ -55,6 +55,12 @@ pub struct EditorApp {
     pub find: find::FindBar,
     /// The row-filter dialog being edited.
     filter_dialog: Option<Filter>,
+    /// The dialect (delimiter and encoding) dialog being edited, with the "other" delimiter text.
+    dialect_dialog: Option<(Dialect, String)>,
+    /// The go-to-row dialog's text.
+    goto: Option<String>,
+    /// A short result shown in the status bar until this time (seconds).
+    note: Option<(String, f64)>,
     title: String,
 }
 
@@ -76,6 +82,9 @@ impl EditorApp {
             quit_confirmed: false,
             find: find::FindBar::default(),
             filter_dialog: None,
+            dialect_dialog: None,
+            goto: None,
+            note: None,
             title: String::new(),
         }
     }
@@ -207,7 +216,31 @@ impl EditorApp {
             let existing = view.filters.iter().find(|f| f.col == col).cloned();
             self.filter_dialog = Some(existing.unwrap_or(Filter { col, kind: FilterKind::Contains, text: String::new() }));
         }
-        let dialog_open = self.message.is_some() || self.prompt.is_some() || self.rename.is_some() || self.filter_dialog.is_some();
+        if std::mem::take(&mut self.grid.dialect_request)
+            && let Some(view) = self.active_view()
+        {
+            let d = view.doc.dialect;
+            let other = if Dialect::DELIMITERS.iter().any(|(b, _)| *b == d.delimiter) { String::new() } else { char::from(d.delimiter).to_string() };
+            self.dialect_dialog = Some((d, other));
+        }
+        if std::mem::take(&mut self.grid.goto_request) {
+            self.goto = Some(String::new());
+        }
+        if let Some(text) = self.grid.note.take() {
+            self.note = Some((text, ctx.input(|i| i.time) + 5.0));
+        }
+        if self.note.as_ref().is_some_and(|(_, until)| ctx.input(|i| i.time) > *until) {
+            self.note = None;
+        }
+        let dialog_open = self.message.is_some()
+            || self.prompt.is_some()
+            || self.rename.is_some()
+            || self.filter_dialog.is_some()
+            || self.dialect_dialog.is_some()
+            || self.goto.is_some();
+        if !dialog_open && ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::G)) {
+            self.goto = Some(String::new());
+        }
         if !dialog_open {
             let (find, replace) = ctx.input_mut(|i| (i.consume_key(Modifiers::COMMAND, Key::F), i.consume_key(Modifiers::COMMAND, Key::H)));
             if find || replace {
@@ -310,6 +343,8 @@ impl EditorApp {
         self.save_prompt(ui.ctx());
         self.rename_dialog(ui.ctx());
         self.filter_dialog(ui.ctx());
+        self.dialect_dialog(ui.ctx());
+        self.goto_dialog(ui.ctx());
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, t: &Tokens) {
@@ -331,6 +366,11 @@ impl EditorApp {
                 if ui.add(egui::Button::new("Save As…").shortcut_text("Ctrl+Shift+S")).clicked() {
                     ui.close();
                     self.save_as(self.active);
+                }
+                ui.separator();
+                if ui.button("Delimiter and encoding…").clicked() {
+                    self.grid.dialect_request = true;
+                    ui.close();
                 }
                 ui.separator();
                 if ui.add(egui::Button::new("Close").shortcut_text("Ctrl+W")).clicked() {
@@ -380,7 +420,14 @@ impl EditorApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(view) = self.active_view() {
                     let d = &view.doc.dialect;
-                    ui.colored_label(t.text_dim, format!("{} · {} · {}", d.delimiter_label(), d.encoding.label(), d.line_ending.label()));
+                    let badge = format!("{} · {} · {}", d.delimiter_label(), d.encoding.label(), d.line_ending.label());
+                    if ui
+                        .add(egui::Button::new(egui::RichText::new(badge).color(t.text_dim)).frame(false))
+                        .on_hover_text("Delimiter and encoding…")
+                        .clicked()
+                    {
+                        self.grid.dialect_request = true;
+                    }
                 }
             });
         });
@@ -429,6 +476,10 @@ impl EditorApp {
             if view.doc.is_dirty() {
                 ui.separator();
                 ui.colored_label(t.text_dim, "Unsaved changes");
+            }
+            if let Some((text, _)) = &self.note {
+                ui.separator();
+                ui.colored_label(t.accent, text);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.colored_label(t.text_dim, format!("{}%", (zoom * 100.0).round()));
@@ -645,6 +696,155 @@ impl EditorApp {
             }
             Some(Done::Cancel) => {}
             None => self.filter_dialog = Some(draft),
+        }
+    }
+
+    fn dialect_dialog(&mut self, ctx: &egui::Context) {
+        let Some((mut draft, mut other)) = self.dialect_dialog.take() else { return };
+        let Some(view) = self.docs.get_mut(self.active) else { return };
+        let mut done = None;
+        let response = egui::Modal::new(Id::unique("dialect-dialog")).show(ctx, |ui| {
+            ui.set_width(400.0);
+            ui.heading("Delimiter and encoding");
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("How the file is written when saved. Detected from the file when it was opened.").weak());
+            ui.add_space(8.0);
+            egui::Grid::new("dialect-grid").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+                ui.label("Delimiter");
+                ui.horizontal(|ui| {
+                    let known = Dialect::DELIMITERS.iter().any(|(b, _)| *b == draft.delimiter);
+                    egui::ComboBox::from_id_salt("dialect-delim")
+                        .selected_text(if known { draft.delimiter_label() } else { "Other".to_string() })
+                        .show_ui(ui, |ui| {
+                            for (b, label) in Dialect::DELIMITERS {
+                                if ui.selectable_label(draft.delimiter == b, label).clicked() {
+                                    draft.delimiter = b;
+                                    other.clear();
+                                }
+                            }
+                            if ui.selectable_label(!known, "Other…").clicked() && known {
+                                draft.delimiter = b':';
+                                other = ":".to_string();
+                            }
+                        });
+                    if !known
+                        && ui.add(egui::TextEdit::singleline(&mut other).desired_width(24.0).char_limit(1)).changed()
+                        && let Some(c) = other.chars().next()
+                        && c.is_ascii()
+                        && !c.is_ascii_control()
+                    {
+                        draft.delimiter = c as u8;
+                    }
+                });
+                ui.end_row();
+                ui.label("Quote character");
+                egui::ComboBox::from_id_salt("dialect-quote").selected_text(char::from(draft.quote).to_string()).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut draft.quote, b'"', "\" (double quote)");
+                    ui.selectable_value(&mut draft.quote, b'\'', "' (single quote)");
+                });
+                ui.end_row();
+                ui.label("Line endings");
+                egui::ComboBox::from_id_salt("dialect-eol").selected_text(draft.line_ending.label()).show_ui(ui, |ui| {
+                    for e in LineEnding::ALL {
+                        ui.selectable_value(&mut draft.line_ending, e, e.label());
+                    }
+                });
+                ui.end_row();
+                ui.label("Encoding");
+                egui::ComboBox::from_id_salt("dialect-enc").selected_text(draft.encoding.label()).show_ui(ui, |ui| {
+                    for e in Encoding::ALL {
+                        ui.selectable_value(&mut draft.encoding, e, e.label());
+                    }
+                });
+                ui.end_row();
+                ui.label("Quote fields");
+                egui::ComboBox::from_id_salt("dialect-quoting").selected_text(draft.quoting.label()).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut draft.quoting, Quoting::Minimal, Quoting::Minimal.label());
+                    ui.selectable_value(&mut draft.quoting, Quoting::All, Quoting::All.label());
+                });
+                ui.end_row();
+            });
+            ui.add_space(6.0);
+            ui.checkbox(&mut draft.trailing_newline, "End the file with a line break");
+            ui.checkbox(&mut draft.pad_rows, "Write every row with the same number of fields");
+            ui.checkbox(&mut draft.header, "First row is the header");
+            let invalid = draft.delimiter == draft.quote;
+            if invalid {
+                ui.colored_label(egui::Color32::from_rgb(0xC4, 0x2B, 0x1C), "The delimiter and the quote character must differ.");
+            }
+            if ui.input(|i| i.key_pressed(Key::Escape)) {
+                done = Some(false);
+            }
+            ui.add_space(10.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Cancel").clicked() {
+                    done = Some(false);
+                }
+                if ui.add_enabled(!invalid, egui::Button::new("Apply")).clicked() {
+                    done = Some(true);
+                }
+            });
+        });
+        if response.should_close() {
+            done = Some(false);
+        }
+        match done {
+            Some(true) => {
+                if draft.header != view.doc.dialect.header {
+                    view.set_header(draft.header);
+                }
+                view.doc.dialect = draft;
+            }
+            Some(false) => {}
+            None => self.dialect_dialog = Some((draft, other)),
+        }
+    }
+
+    fn goto_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut text) = self.goto.take() else { return };
+        let Some(view) = self.docs.get_mut(self.active) else { return };
+        let mut done = None;
+        let response = egui::Modal::new(Id::unique("goto-dialog")).show(ctx, |ui| {
+            ui.set_width(260.0);
+            ui.heading("Go to row");
+            ui.add_space(6.0);
+            let edit = ui.add(egui::TextEdit::singleline(&mut text).hint_text("row number").desired_width(f32::INFINITY));
+            if !ui.memory(|m| m.has_focus(edit.id)) && done.is_none() {
+                edit.request_focus();
+            }
+            if edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                done = Some(true);
+            }
+            if ui.input(|i| i.key_pressed(Key::Escape)) {
+                done = Some(false);
+            }
+            ui.add_space(10.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Cancel").clicked() {
+                    done = Some(false);
+                }
+                if ui.button("Go").clicked() {
+                    done = Some(true);
+                }
+            });
+        });
+        if response.should_close() {
+            done = Some(false);
+        }
+        match done {
+            Some(true) => {
+                if let Ok(n) = text.trim().parse::<usize>()
+                    && n >= 1
+                {
+                    let row = view.snap_visible((n - 1).clamp(view.body_start(), view.max_cell().row));
+                    view.sel = csv_editor_table::Selection::at(csv_editor_table::CellRef::new(row, view.sel.active.col));
+                    self.grid.scroll_to_active = true;
+                } else {
+                    self.goto = Some(text);
+                }
+            }
+            Some(false) => {}
+            None => self.goto = Some(text),
         }
     }
 }

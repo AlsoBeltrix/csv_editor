@@ -1,7 +1,7 @@
 //! Editing operations on a document, driven by its selection. Shared by the menu bar, the grid's
 //! context menu and the keyboard shortcuts, so each exists once.
 
-use csv_editor_table::{Cell, CellRef, Range, Row, Selection, SortKind, SortSpec, io};
+use csv_editor_table::{Case, Cell, CellRef, Range, Row, Selection, SortKind, SortSpec, io};
 use egui::{Button, Ui};
 
 use crate::grid::{self, Clip, GridState};
@@ -260,6 +260,65 @@ pub fn edit_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
         fill_down(grid, view);
         ui.close();
     }
+    ui.separator();
+    if item(ui, true, "Go to row…", "Ctrl+G") {
+        grid.goto_request = true;
+        ui.close();
+    }
+}
+
+/// The whole body of the table (header row excluded).
+pub fn whole_body(view: &DocView) -> Range {
+    let table = &view.doc.table;
+    let start = view.body_start();
+    Range::new(CellRef::new(start, 0), CellRef::new(table.row_count().saturating_sub(1).max(start), table.width().saturating_sub(1)))
+}
+
+/// Where a cleanup tool works: the selection when more than one cell is selected, else everything.
+fn scope(view: &DocView) -> Range {
+    if view.sel.is_single_cell() { whole_body(view) } else { view.sel.bounds() }
+}
+
+fn note(grid: &mut GridState, n: usize, what: &str, verb: &str) {
+    grid.note = Some(if n == 0 { format!("No {what} {verb}") } else { format!("{n} {what} {verb}") });
+}
+
+pub fn trim_whitespace(grid: &mut GridState, view: &mut DocView) -> usize {
+    grid::commit_edit(grid, view);
+    let n = view.doc.trim_whitespace(scope(view));
+    note(grid, n, "cells", "trimmed");
+    n
+}
+
+pub fn change_case(grid: &mut GridState, view: &mut DocView, case: Case) -> usize {
+    grid::commit_edit(grid, view);
+    let n = view.doc.change_case(scope(view), case);
+    note(grid, n, "cells", "changed");
+    n
+}
+
+pub fn remove_empty_rows(grid: &mut GridState, view: &mut DocView) -> usize {
+    grid::cancel_edit(grid);
+    let n = view.doc.remove_empty_rows(view.body_start());
+    view.clamp_selection();
+    note(grid, n, "empty rows", "removed");
+    n
+}
+
+pub fn remove_empty_cols(grid: &mut GridState, view: &mut DocView) -> usize {
+    grid::cancel_edit(grid);
+    let n = view.doc.remove_empty_cols();
+    view.clamp_selection();
+    note(grid, n, "empty columns", "removed");
+    n
+}
+
+pub fn remove_duplicate_rows(grid: &mut GridState, view: &mut DocView) -> usize {
+    grid::cancel_edit(grid);
+    let n = view.doc.remove_duplicate_rows(view.body_start());
+    view.clamp_selection();
+    note(grid, n, "duplicate rows", "removed");
+    n
 }
 
 pub fn rows_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
@@ -366,6 +425,33 @@ pub fn data_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
     if item(ui, view.filtered(), "Clear all filters", "") {
         view.clear_filters();
         grid.scroll_to_active = true;
+        ui.close();
+    }
+    ui.separator();
+    let where_ = if view.sel.is_single_cell() { "everywhere" } else { "in the selection" };
+    if item(ui, true, format!("Trim whitespace {where_}"), "") {
+        trim_whitespace(grid, view);
+        ui.close();
+    }
+    ui.menu_button(format!("Change case {where_}"), |ui| {
+        for case in Case::ALL {
+            if ui.button(case.label()).clicked() {
+                change_case(grid, view, case);
+                ui.close();
+            }
+        }
+    });
+    ui.separator();
+    if item(ui, true, "Remove empty rows", "") {
+        remove_empty_rows(grid, view);
+        ui.close();
+    }
+    if item(ui, true, "Remove empty columns", "") {
+        remove_empty_cols(grid, view);
+        ui.close();
+    }
+    if item(ui, true, "Remove duplicate rows", "") {
+        remove_duplicate_rows(grid, view);
         ui.close();
     }
 }
