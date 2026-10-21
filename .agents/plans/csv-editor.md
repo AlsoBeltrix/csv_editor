@@ -21,8 +21,9 @@ Open Recent menu, system font fallbacks (Segoe UI plus symbol and CJK faces, val
 egui sees them), zone-aware right-click menus (cells, row gutter, column header), a Help menu
 with the shortcut list and About, and an open-time log line.
 
-Large-file soak (debug profile, this machine): a 100.3 MB, 1,357,661-row × 8-column file opened
-in 1.15 s with a peak working set of 831 MB.
+Large-file soak (this machine, Intel integrated GPU): a 100.3 MB, 1,357,661-row × 8-column file
+opened in 0.70 s (release) / 1.15 s (dev profile) with a peak working set of 702 MB / 831 MB. The
+release executable is 16.3 MB.
 
 ## Goal
 
