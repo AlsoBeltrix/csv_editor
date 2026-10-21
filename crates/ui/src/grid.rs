@@ -506,7 +506,7 @@ fn paint(ui: &egui::Ui, geo: &Geo, view: &DocView, t: &Tokens) {
             if clip.width() <= 0.0 || clip.height() <= 0.0 {
                 continue;
             }
-            let color = if header && r == 0 { t.header_text } else { t.cell_text };
+            let color = t.cell_text;
             if tall {
                 // A row sized to its content shows every line.
                 let shown = text.replace("\r\n", "\n").replace('\r', "\n");
