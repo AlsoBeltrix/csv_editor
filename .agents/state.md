@@ -5,7 +5,7 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master` (no rem
 ## Now
 
 - **CSV editor — implementing the approved plan** (`.agents/plans/csv-editor.md`, approved
-  2026-10-21). Slices 1–5 landed 2026-10-21: Cargo workspace (`crates/table`, `crates/ui`,
+  2026-10-21). Slices 1–6 landed 2026-10-21: Cargo workspace (`crates/table`, `crates/ui`,
   `apps/csv-editor`), eframe shell with the Windows graphics probe, table model with CSV
   sniff/parse/write, inverse-edit undo, document open/save, selection model, and the read-only
   grid (virtualized, own scrollbars, selection with mouse and keyboard, column resize/autofit,
@@ -15,9 +15,13 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master` (no rem
   header rename, Save/Save As with the dialect preserved, save-changes prompts on close and
   quit), and the clipboard (Ctrl+C/X/V and Edit menu: tab-separated text to the system
   clipboard, exact cells within the editor, tiling into a multiple-sized range, growth, cut
-  moves as one undo step). Verification entry point (see `.agents/repo-guidance.md`) passes.
-  Next action: slice 6 (find and replace with options and scope; sort by column text/numeric/
-  natural, header-aware, undoable as a permutation; per-column quick filter as a view).
+  moves as one undo step), find/replace (Ctrl+F/H bar with case, whole-cell and regex options
+  and a scope of everywhere/selection/column), sort (Data menu: natural text or numeric, either
+  direction, header row kept, one undo step) and row filters (per column: contains, equals,
+  blank…; a view the grid scrolls through, hidden rows skipped by arrows and find).
+  Verification entry point (see `.agents/repo-guidance.md`) passes.
+  Next action: slice 7 (cleanup tools: trim, drop empty rows/columns, dedupe, change case, go
+  to row; dialect dialog for delimiter/quote/line ending/encoding/quoting/header).
 
 ## Facts
 

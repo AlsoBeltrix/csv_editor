@@ -1,7 +1,8 @@
 //! The grid: row gutter, column headers, cells, selection, scrolling and column sizing.
 //!
 //! Only the visible rows and columns are laid out and painted. Scrolling is by whole rows and
-//! columns (`DocView::scroll_row` / `scroll_col`), so a million rows never meet f32 precision. The
+//! columns (`DocView::scroll` / `scroll_col`), so a million rows never meet f32 precision. Rows
+//! hidden by a filter are skipped: the grid walks *display rows* (see `DocView`). The
 //! scrollbars are drawn by hand (after GridCraft's `grid.rs`, MIT, see `ATTRIBUTION.md`).
 
 use std::rc::Rc;
@@ -30,6 +31,10 @@ pub struct GridState {
     pub editor: Option<CellEditor>,
     /// A request to rename this column's header, picked up by the app's dialog.
     pub rename_request: Option<usize>,
+    /// A request to open the row-filter dialog for this column, picked up by the app.
+    pub filter_request: Option<usize>,
+    /// Scroll so the active cell is in view on the next frame (set by find, sort, filters).
+    pub scroll_to_active: bool,
     /// The last copied or cut block, kept as cells so a paste within the editor is exact.
     pub clip: Option<Clip>,
     /// Reads the system clipboard, for the menu's Paste (Ctrl+V arrives as an egui event).
@@ -81,6 +86,8 @@ impl Default for GridState {
             wheel: Vec2::ZERO,
             clip: None,
             paste_text: None,
+            filter_request: None,
+            scroll_to_active: false,
         }
     }
 }
@@ -238,17 +245,17 @@ fn geometry(grid: &GridState, view: &mut DocView, rect: Rect) -> Geo {
     let digits = view.extent_rows().to_string().len() as f32;
     let gutter_w = (digits * 8.0 + 16.0).max(40.0) * z;
     let cells = Rect::from_min_max(pos2(rect.left() + gutter_w, rect.top() + head_h), rect.max);
-    let body_start = view.body_start();
+    view.refresh_visible();
     let visible_rows = ((cells.height() / rh).floor().max(1.0)) as usize;
-    let max_scroll_row = view.extent_rows().saturating_sub(visible_rows).max(body_start);
-    view.scroll_row = view.scroll_row.clamp(body_start, max_scroll_row);
+    let max_scroll = view.display_count().saturating_sub(visible_rows);
+    view.scroll = view.scroll.min(max_scroll);
     view.scroll_col = view.scroll_col.min(view.extent_cols().saturating_sub(1));
     let mut rows = Vec::new();
-    let (mut y, mut r) = (cells.top(), view.scroll_row);
+    let (mut y, mut i) = (cells.top(), view.scroll);
     while y < cells.bottom() && rows.len() < 10_000 {
-        rows.push((r, y, y + rh));
+        rows.push((view.row_at_display(i), y, y + rh));
         y += rh;
-        r = r.saturating_add(1);
+        i = i.saturating_add(1);
     }
     let mut cols = Vec::new();
     let (mut x, mut c) = (cells.left(), view.scroll_col);
@@ -279,6 +286,9 @@ pub fn show(app: &mut EditorApp, ui: &mut egui::Ui, t: &Tokens) {
     }
 
     let geo = geometry(grid, view, rect);
+    if std::mem::take(&mut grid.scroll_to_active) {
+        ensure_visible(grid, view, &geo);
+    }
     interact(grid, view, ui, &resp, &geo);
     // Interaction may have scrolled or resized: lay out again before painting.
     let geo = geometry(grid, view, rect);
@@ -468,6 +478,8 @@ fn paint_headers(p: &egui::Painter, geo: &Geo, view: &DocView, t: &Tokens) {
             p.rect_filled(r.intersect(head), 0.0, t.header_all_bg);
         } else if selected {
             p.rect_filled(r.intersect(head), 0.0, t.header_sel_bg);
+        } else if view.filters.iter().any(|f| f.col == c) {
+            p.rect_filled(r.intersect(head), 0.0, t.accent_soft);
         }
         let color = if selected { t.header_sel_text } else { t.header_text };
         let clip = p.with_clip_rect(r.intersect(head).shrink2(vec2(3.0 * z, 0.0)));
@@ -628,9 +640,9 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
         // Dragging past an edge scrolls.
         if grid.drag.is_some() && !matches!(grid.drag, Some(Drag::Resize { .. })) {
             if p.y > geo.cells.bottom() {
-                view.scroll_row = view.scroll_row.saturating_add(1);
+                view.scroll = view.scroll.saturating_add(1);
             } else if p.y < geo.cells.top() && !matches!(grid.drag, Some(Drag::Cols)) {
-                view.scroll_row = view.scroll_row.saturating_sub(1).max(body_start);
+                view.scroll = view.scroll.saturating_sub(1);
             }
             if p.x > geo.cells.right() {
                 view.scroll_col = view.scroll_col.saturating_add(1);
@@ -653,7 +665,7 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
             let dy = (grid.wheel.y / geo.rh).trunc();
             if dy != 0.0 {
                 grid.wheel.y -= dy * geo.rh;
-                view.scroll_row = (view.scroll_row as i64 - dy as i64).max(body_start as i64) as usize;
+                view.scroll = (view.scroll as i64 - dy as i64).max(0) as usize;
             }
             let unit = (grid.default_col_width * geo.z).max(1.0);
             let dx = (grid.wheel.x / unit).trunc();
@@ -674,7 +686,17 @@ fn step(view: &mut DocView, dr: i64, dc: i64, shift: bool, jump: bool) {
     let max = view.max_cell();
     let body_start = view.body_start();
     let from = if shift { view.sel.moving_end() } else { view.sel.active };
-    let to = if jump { selection::jump(&view.doc.table, from, dr, dc, max) } else { from.offset(dr, dc, max) };
+    let to = if jump {
+        let t = selection::jump(&view.doc.table, from, dr, dc, max);
+        CellRef::new(view.snap_visible(t.row), t.col)
+    } else if dr != 0 && view.filtered() {
+        // Row steps walk the displayed rows, so hidden rows are skipped.
+        let d = view.display_of_row(from.row) as i64 + dr;
+        let d = d.clamp(0, view.display_count().saturating_sub(1) as i64) as usize;
+        CellRef::new(view.row_at_display(d), from.offset(0, dc, max).col)
+    } else {
+        from.offset(dr, dc, max)
+    };
     let to = CellRef::new(to.row.max(body_start), to.col);
     if shift { view.sel.extend_to(to) } else { view.sel = Selection::at(to) }
 }
@@ -796,10 +818,11 @@ fn keyboard(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, geo: &G
 fn ensure_visible(grid: &GridState, view: &mut DocView, geo: &Geo) {
     let a = view.sel.active;
     let full_rows = geo.full_rows();
-    if a.row < view.scroll_row {
-        view.scroll_row = a.row;
-    } else if a.row >= view.scroll_row + full_rows {
-        view.scroll_row = a.row + 1 - full_rows;
+    let d = view.display_of_row(a.row);
+    if d < view.scroll {
+        view.scroll = d;
+    } else if d >= view.scroll + full_rows {
+        view.scroll = d + 1 - full_rows;
     }
     if a.col < view.scroll_col {
         view.scroll_col = a.col;
@@ -839,11 +862,10 @@ fn thumb_colour(resp: &Response, t: &Tokens) -> Color32 {
 }
 
 fn vertical_scrollbar(view: &mut DocView, ui: &mut egui::Ui, track: Rect, geo: &Geo, t: &Tokens) {
-    let body_start = view.body_start();
     let visible = geo.full_rows() as f32;
-    let extent = view.extent_rows().saturating_sub(body_start) as f32;
+    let extent = view.display_count() as f32;
     let max_scroll = (extent - visible).max(0.0);
-    let scroll = view.scroll_row.saturating_sub(body_start) as f32;
+    let scroll = view.scroll as f32;
     let id = ui.scope_id().with("vscroll");
     let resp = ui.interact(track, id, Sense::CLICK | Sense::DRAG);
     ui.painter().rect_filled(track, 0.0, t.tab_bar);
@@ -874,7 +896,7 @@ fn vertical_scrollbar(view: &mut DocView, ui: &mut egui::Ui, track: Rect, geo: &
     }
     let next = next.round().clamp(0.0, max_scroll);
     if next != scroll {
-        view.scroll_row = body_start.saturating_add(next as usize);
+        view.scroll = next as usize;
         ui.ctx().request_repaint();
     }
 }
@@ -955,13 +977,15 @@ mod tests {
         let doc = Document::from_bytes(b"h1,h2\n1,2\n3,4\n", &ParseOptions::default()).unwrap();
         let mut view = DocView::new(doc);
         let grid = GridState::default();
-        view.scroll_row = 0; // the header row is not scrollable into the body
+        view.scroll = 999; // far past the end: clamped so the last rows fill the view
         view.scroll_col = 999;
         let geo = geometry(&grid, &mut view, Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)));
-        assert_eq!(view.scroll_row, 1);
+        assert_eq!(view.scroll, view.display_count() - geo.rows.len() + 1);
         assert_eq!(view.scroll_col, view.extent_cols() - 1);
         assert!(geo.rows.len() >= 10 && !geo.cols.is_empty());
-        assert_eq!(geo.rows.first().map(|r| r.0), Some(1));
+        view.scroll = 0;
+        let geo = geometry(&grid, &mut view, Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)));
+        assert_eq!(geo.rows.first().map(|r| r.0), Some(1), "the header row is not in the body");
         assert!(geo.cell_at(geo.cells.min).is_some());
         assert!(geo.cell_at(pos2(-1.0, -1.0)).is_none());
         let far = Range::new(CellRef::new(500, 500), CellRef::new(600, 600));

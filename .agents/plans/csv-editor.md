@@ -4,12 +4,15 @@ Status: **approved 2026-10-21** (owner chose "lean standalone app" over wrapping
 Implementation: in progress on `master`, slice by slice. Each slice is one or more commits that
 pass the verification entry point before landing.
 
-Progress: slices 1–5 landed 2026-10-21. Verified on this machine: build, tests, clippy, fmt, and a
+Progress: slices 1–6 landed 2026-10-21. Verified on this machine: build, tests, clippy, fmt, and a
 headless screenshot (`CSV_EDITOR_SCREENSHOT=<png>` saves the window after a few frames and quits)
 showing a 400-row sample with header names, leading zeros kept and numbers right-aligned.
 Slice 4 added headless interface tests (`crates/ui/tests/editing.rs`, egui_kittest) that type,
 press keys and check the document. Slice 5 added copy/cut/paste (tab-separated text, exact cells
-within the editor, tiling, growth, cut-moves). Next: slice 6 (find, replace, sort, filter).
+within the editor, tiling, growth, cut-moves). Slice 6 added the find/replace bar (Ctrl+F/H;
+case, whole cell, regex; scope everywhere/selection/column), sorting by column (natural text or
+numeric, header-aware, one undo step) and per-column row filters as a view the grid scrolls
+through. Next: slice 7 (cleanup tools, dialect dialog).
 
 ## Goal
 

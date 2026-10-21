@@ -11,4 +11,5 @@ workspace = true
 
 [dependencies]
 compact_str = { workspace = true }
+regex = { workspace = true }
 thiserror = { workspace = true }

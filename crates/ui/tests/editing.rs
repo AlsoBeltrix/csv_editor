@@ -153,6 +153,58 @@ fn copy_cut_and_paste_move_blocks_of_cells() {
 }
 
 #[test]
+fn find_sort_and_filter_work_through_the_interface() {
+    use csv_editor_ui::{Filter, FilterKind};
+    let mut h = harness(app("name,city\r\nBob,Oslo\r\nAnn,Berlin\r\nCy,Oslo\r\nDee,Lisbon\r\n"));
+    // Find: "oslo" from the first cell lands on B2, then wraps through B4.
+    {
+        let EditorApp { find, grid, docs, active, .. } = h.state_mut();
+        find.opts.query = "oslo".to_string();
+        assert!(find.next(grid, &mut docs[*active], true));
+    }
+    assert_eq!(active(&h), CellRef::new(1, 1));
+    {
+        let EditorApp { find, grid, docs, active, .. } = h.state_mut();
+        assert!(find.next(grid, &mut docs[*active], true));
+    }
+    assert_eq!(active(&h), CellRef::new(3, 1));
+    // Replace all in the column scope.
+    {
+        let EditorApp { find, grid, docs, active, .. } = h.state_mut();
+        find.replacement = "Bergen".to_string();
+        find.replace_all(grid, &mut docs[*active]);
+        assert_eq!(find.status, "2 replaced");
+    }
+    assert_eq!(cell(&h, 1, 1), "Bergen");
+    // Sort by name (column A) ascending.
+    press(&mut h, Key::Home);
+    {
+        let EditorApp { grid, docs, active, .. } = h.state_mut();
+        assert!(csv_editor_ui::ops::sort(grid, &mut docs[*active], true, csv_editor_table::SortKind::Text));
+    }
+    h.run();
+    assert_eq!((cell(&h, 1, 0), cell(&h, 2, 0), cell(&h, 3, 0), cell(&h, 4, 0)), ("Ann".into(), "Bob".into(), "Cy".into(), "Dee".into()));
+    // Filter to Bergen rows (Bob, Cy): arrow keys skip the hidden rows.
+    h.state_mut().docs[0].set_filter(Filter { col: 1, kind: FilterKind::Equals, text: "bergen".to_string() });
+    h.run();
+    assert_eq!(h.state().docs[0].visible_count(), 2);
+    press_with(&mut h, Modifiers::COMMAND, Key::Home);
+    assert_eq!(active(&h), CellRef::new(2, 0), "Ann's row is hidden; Ctrl+Home lands on the first visible row");
+    assert_eq!(cell(&h, 2, 0), "Bob");
+    press(&mut h, Key::ArrowDown);
+    h.run();
+    assert_eq!(active(&h), CellRef::new(3, 0));
+    assert_eq!(cell(&h, 3, 0), "Cy");
+    press(&mut h, Key::ArrowDown);
+    assert_eq!(active(&h), CellRef::new(5, 0), "Dee is hidden: next is the first blank row");
+    press(&mut h, Key::ArrowUp);
+    assert_eq!(active(&h), CellRef::new(3, 0), "and back up skips it again");
+    h.state_mut().docs[0].clear_filters();
+    h.run();
+    assert_eq!(h.state().docs[0].visible_count(), 4);
+}
+
+#[test]
 fn a_new_document_starts_empty_and_saves_only_what_was_typed() {
     let mut h = harness(EditorApp::new(Services::default()));
     assert!(!h.state().docs[0].doc.dialect.header);

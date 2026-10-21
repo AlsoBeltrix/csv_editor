@@ -7,7 +7,9 @@ pub mod dialect;
 pub mod document;
 pub mod edit;
 pub mod io;
+pub mod search;
 pub mod selection;
+pub mod sort;
 pub mod table;
 pub mod text;
 
@@ -15,7 +17,9 @@ pub use dialect::{Dialect, Encoding, LineEnding, Quoting};
 pub use document::Document;
 pub use edit::{Edit, History};
 pub use io::{Error, ParseOptions};
+pub use search::{FindOptions, Matcher};
 pub use selection::{CellRef, Range, Selection};
+pub use sort::{SortKind, SortSpec};
 pub use table::{Cell, Row, Table};
 
 /// Spreadsheet-style column label: 0 → `A`, 25 → `Z`, 26 → `AA`.

@@ -763,6 +763,7 @@ name = "csv-editor-table"
 version = "0.1.0"
 dependencies = [
  "compact_str",
+ "regex",
  "thiserror 2.0.21",
 ]
 

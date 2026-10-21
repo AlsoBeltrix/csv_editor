@@ -1,7 +1,7 @@
 //! Editing operations on a document, driven by its selection. Shared by the menu bar, the grid's
 //! context menu and the keyboard shortcuts, so each exists once.
 
-use csv_editor_table::{Cell, CellRef, Range, Row, Selection, io};
+use csv_editor_table::{Cell, CellRef, Range, Row, Selection, SortKind, SortSpec, io};
 use egui::{Button, Ui};
 
 use crate::grid::{self, Clip, GridState};
@@ -323,6 +323,53 @@ pub fn cols_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
     }
 }
 
+/// Sorts the body rows by the active cell's column.
+pub fn sort(grid: &mut GridState, view: &mut DocView, ascending: bool, kind: SortKind) -> bool {
+    grid::commit_edit(grid, view);
+    let spec = SortSpec { col: view.sel.active.col, ascending, kind };
+    let did = view.doc.sort(view.body_start(), spec);
+    grid.scroll_to_active = true;
+    did
+}
+
+pub fn data_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
+    let col = view.sel.active.col;
+    let title = view.column_title(col);
+    ui.label(egui::RichText::new(format!("Column {title}")).weak());
+    if item(ui, true, "Sort A → Z", "") {
+        sort(grid, view, true, SortKind::Text);
+        ui.close();
+    }
+    if item(ui, true, "Sort Z → A", "") {
+        sort(grid, view, false, SortKind::Text);
+        ui.close();
+    }
+    if item(ui, true, "Sort numbers 0 → 9", "") {
+        sort(grid, view, true, SortKind::Numeric);
+        ui.close();
+    }
+    if item(ui, true, "Sort numbers 9 → 0", "") {
+        sort(grid, view, false, SortKind::Numeric);
+        ui.close();
+    }
+    ui.separator();
+    if item(ui, true, "Filter rows by this column…", "") {
+        grid.filter_request = Some(col);
+        ui.close();
+    }
+    let has_filter = view.filters.iter().any(|f| f.col == col);
+    if item(ui, has_filter, "Clear this column's filter", "") {
+        view.clear_filter(col);
+        grid.scroll_to_active = true;
+        ui.close();
+    }
+    if item(ui, view.filtered(), "Clear all filters", "") {
+        view.clear_filters();
+        grid.scroll_to_active = true;
+        ui.close();
+    }
+}
+
 /// The grid's right-click menu.
 pub fn context_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
     ui.set_min_width(220.0);
@@ -330,6 +377,7 @@ pub fn context_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
     ui.separator();
     ui.menu_button("Rows", |ui| rows_menu(grid, view, ui));
     ui.menu_button("Columns", |ui| cols_menu(grid, view, ui));
+    ui.menu_button("Sort and filter", |ui| data_menu(grid, view, ui));
 }
 
 #[cfg(test)]

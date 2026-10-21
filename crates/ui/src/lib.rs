@@ -1,6 +1,7 @@
 //! The CSV editor's egui interface: toolbar, tabs, grid and status bar. Thin over
 //! `csv_editor_table`: this crate holds interface state and drawing, the table crate holds the data.
 
+pub mod find;
 pub mod grid;
 pub mod ops;
 pub mod theme;
@@ -12,7 +13,7 @@ use std::rc::Rc;
 use csv_editor_table::{Document, ParseOptions};
 use egui::{Id, Key, Modifiers, ViewportCommand};
 use theme::Tokens;
-pub use view::DocView;
+pub use view::{DocView, Filter, FilterKind};
 
 /// Host services the platform shell provides (file pickers). Absent on hosts without them.
 #[derive(Default)]
@@ -51,6 +52,9 @@ pub struct EditorApp {
     rename: Option<(usize, String)>,
     /// Set once the user has answered every "save changes?" question before quitting.
     quit_confirmed: bool,
+    pub find: find::FindBar,
+    /// The row-filter dialog being edited.
+    filter_dialog: Option<Filter>,
     title: String,
 }
 
@@ -70,6 +74,8 @@ impl EditorApp {
             prompt: None,
             rename: None,
             quit_confirmed: false,
+            find: find::FindBar::default(),
+            filter_dialog: None,
             title: String::new(),
         }
     }
@@ -195,7 +201,27 @@ impl EditorApp {
         {
             self.rename = Some((col, view.header_name(col).to_string()));
         }
-        let dialog_open = self.message.is_some() || self.prompt.is_some() || self.rename.is_some();
+        if let Some(col) = self.grid.filter_request.take()
+            && let Some(view) = self.active_view()
+        {
+            let existing = view.filters.iter().find(|f| f.col == col).cloned();
+            self.filter_dialog = Some(existing.unwrap_or(Filter { col, kind: FilterKind::Contains, text: String::new() }));
+        }
+        let dialog_open = self.message.is_some() || self.prompt.is_some() || self.rename.is_some() || self.filter_dialog.is_some();
+        if !dialog_open {
+            let (find, replace) = ctx.input_mut(|i| (i.consume_key(Modifiers::COMMAND, Key::F), i.consume_key(Modifiers::COMMAND, Key::H)));
+            if find || replace {
+                grid::commit_edit_in(&mut self.grid, self.docs.get_mut(self.active));
+                self.find.show(replace);
+            }
+            if self.find.open
+                && self.grid.editor.is_none()
+                && ctx.memory(|m| m.focused().is_none_or(|id| id != Id::unique("find-query")))
+                && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+            {
+                self.find.close();
+            }
+        }
         if !dialog_open && self.grid.editor.is_none() {
             self.shortcuts(ctx);
         }
@@ -263,6 +289,19 @@ impl EditorApp {
                 .frame(egui::Frame::new().fill(t.tab_bar).inner_margin(egui::Margin::symmetric(6, 2)))
                 .show(ui, |ui| self.tabs(ui, &t));
         }
+        if self.find.open {
+            let EditorApp { find, grid, docs, active, .. } = self;
+            if let Some(view) = docs.get_mut(*active) {
+                egui::Panel::top("find")
+                    .frame(
+                        egui::Frame::new()
+                            .fill(t.toolbar)
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .stroke(egui::Stroke::new(1.0, t.toolbar_border)),
+                    )
+                    .show(ui, |ui| find.ui(ui, grid, view, &t));
+            }
+        }
         egui::Panel::bottom("status")
             .frame(egui::Frame::new().fill(t.status_bar).inner_margin(egui::Margin::symmetric(8, 3)))
             .show(ui, |ui| self.status_bar(ui, &t));
@@ -270,6 +309,7 @@ impl EditorApp {
         self.message_box(ui.ctx());
         self.save_prompt(ui.ctx());
         self.rename_dialog(ui.ctx());
+        self.filter_dialog(ui.ctx());
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, t: &Tokens) {
@@ -306,6 +346,7 @@ impl EditorApp {
                 ui.menu_button("Edit", |ui| ops::edit_menu(grid, view, ui));
                 ui.menu_button("Rows", |ui| ops::rows_menu(grid, view, ui));
                 ui.menu_button("Columns", |ui| ops::cols_menu(grid, view, ui));
+                ui.menu_button("Data", |ui| ops::data_menu(grid, view, ui));
             }
             ui.menu_button("View", |ui| {
                 if ui.add(egui::Button::new("Zoom in").shortcut_text("Ctrl++")).clicked() {
@@ -375,7 +416,11 @@ impl EditorApp {
         let sel = &view.sel;
         let bounds = sel.bounds();
         ui.horizontal(|ui| {
-            ui.colored_label(t.text_dim, format!("{data_rows} rows × {} columns", table.width()));
+            if view.filtered() {
+                ui.colored_label(t.accent, format!("{} of {data_rows} rows shown × {} columns", view.visible_count(), table.width()));
+            } else {
+                ui.colored_label(t.text_dim, format!("{data_rows} rows × {} columns", table.width()));
+            }
             if !sel.is_single_cell() {
                 ui.separator();
                 let cells: usize = sel.ranges.iter().map(|r| r.row_count().saturating_mul(r.col_count())).sum();
@@ -528,6 +573,78 @@ impl EditorApp {
             }
             Some(false) => {}
             None => self.rename = Some((col, text)),
+        }
+    }
+
+    fn filter_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.filter_dialog.take() else { return };
+        let Some(view) = self.docs.get_mut(self.active) else { return };
+        #[derive(PartialEq)]
+        enum Done {
+            Apply,
+            Clear,
+            Cancel,
+        }
+        let mut done = None;
+        let width = view.doc.table.width().max(draft.col + 1);
+        let response = egui::Modal::new(Id::unique("filter-dialog")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.heading("Filter rows");
+            ui.add_space(6.0);
+            egui::Grid::new("filter-grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                ui.label("Column");
+                egui::ComboBox::from_id_salt("filter-col").selected_text(view.column_title(draft.col)).show_ui(ui, |ui| {
+                    for c in 0..width.min(10_000) {
+                        ui.selectable_value(&mut draft.col, c, view.column_title(c));
+                    }
+                });
+                ui.end_row();
+                ui.label("Show rows where it");
+                egui::ComboBox::from_id_salt("filter-kind").selected_text(draft.kind.label()).show_ui(ui, |ui| {
+                    for k in FilterKind::ALL {
+                        ui.selectable_value(&mut draft.kind, k, k.label());
+                    }
+                });
+                ui.end_row();
+                if draft.kind.takes_text() {
+                    ui.label("Text");
+                    let edit = ui.add(egui::TextEdit::singleline(&mut draft.text).desired_width(f32::INFINITY));
+                    if edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                        done = Some(Done::Apply);
+                    }
+                    ui.end_row();
+                }
+            });
+            if ui.input(|i| i.key_pressed(Key::Escape)) {
+                done = Some(Done::Cancel);
+            }
+            ui.add_space(10.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Cancel").clicked() {
+                    done = Some(Done::Cancel);
+                }
+                if ui.add_enabled(view.filters.iter().any(|f| f.col == draft.col), egui::Button::new("Clear")).clicked() {
+                    done = Some(Done::Clear);
+                }
+                if ui.button("Apply").clicked() {
+                    done = Some(Done::Apply);
+                }
+            });
+        });
+        if response.should_close() {
+            done = Some(Done::Cancel);
+        }
+        match done {
+            Some(Done::Apply) => {
+                view.set_filter(draft);
+                self.grid.scroll_to_active = true;
+            }
+            Some(Done::Clear) => {
+                view.clear_filter(draft.col);
+                self.grid.scroll_to_active = true;
+            }
+            Some(Done::Cancel) => {}
+            None => self.filter_dialog = Some(draft),
         }
     }
 }
