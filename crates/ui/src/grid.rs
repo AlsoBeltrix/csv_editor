@@ -1,9 +1,10 @@
-//! The grid: row gutter, column headers, cells, selection, scrolling and column sizing.
+//! The grid: row gutter, column headers, cells, selection, scrolling, column and row sizing.
 //!
 //! Only the visible rows and columns are laid out and painted. Scrolling is by whole rows and
 //! columns (`DocView::scroll` / `scroll_col`), so a million rows never meet f32 precision. Rows
-//! hidden by a filter are skipped: the grid walks *display rows* (see `DocView`). The
-//! scrollbars are drawn by hand (after GridCraft's `grid.rs`, MIT, see `ATTRIBUTION.md`).
+//! hidden by a filter are skipped: the grid walks *display rows* (see `DocView`). The first row
+//! can be frozen. The scrollbars are drawn by hand (after GridCraft's `grid.rs`, MIT, see
+//! `ATTRIBUTION.md`).
 
 use std::rc::Rc;
 
@@ -18,8 +19,13 @@ pub const SCROLLBAR: f32 = 12.0;
 const RESIZE_GRIP: f32 = 4.0;
 pub const MIN_COL_WIDTH: f32 = 20.0;
 pub const MAX_COL_WIDTH: f32 = 2000.0;
+pub const MIN_ROW_HEIGHT: f32 = 12.0;
+pub const MAX_ROW_HEIGHT: f32 = 800.0;
 pub const MIN_ZOOM: f32 = 0.5;
 pub const MAX_ZOOM: f32 = 2.0;
+/// Cell text size in unzoomed points; one text line in a cell is about 1.3× this.
+const CELL_FONT: f32 = 13.0;
+const LINE_HEIGHT: f32 = 17.0;
 
 #[derive(Clone)]
 pub struct GridState {
@@ -29,8 +35,6 @@ pub struct GridState {
     pub zoom: f32,
     /// The in-cell editor, while a cell is being edited.
     pub editor: Option<CellEditor>,
-    /// A request to rename this column's header, picked up by the app's dialog.
-    pub rename_request: Option<usize>,
     /// A request to open the row-filter dialog for this column, picked up by the app.
     pub filter_request: Option<usize>,
     /// Scroll so the active cell is in view on the next frame (set by find, sort, filters).
@@ -86,7 +90,8 @@ enum Drag {
     Cells,
     Rows,
     Cols,
-    Resize { col: usize, start_x: f32, start_w: f32 },
+    ColResize { col: usize, start_x: f32, start_w: f32 },
+    RowResize { row: usize, start_y: f32, start_h: f32 },
 }
 
 impl Default for GridState {
@@ -97,7 +102,6 @@ impl Default for GridState {
             header_height: 24.0,
             zoom: 1.0,
             editor: None,
-            rename_request: None,
             drag: None,
             wheel: Vec2::ZERO,
             clip: None,
@@ -164,10 +168,13 @@ pub struct Geo {
     /// The body: cells only.
     pub cells: Rect,
     pub z: f32,
+    /// The default row height, zoomed.
     pub rh: f32,
+    /// Height of the frozen first row, 0 when none.
+    pub frozen_h: f32,
     /// Visible columns: index and horizontal extent (the last one may be partly hidden).
     pub cols: Vec<(usize, f32, f32)>,
-    /// Visible rows: index and vertical extent.
+    /// Visible rows: index and vertical extent (the frozen row first, when there is one).
     pub rows: Vec<(usize, f32, f32)>,
 }
 
@@ -213,20 +220,32 @@ impl Geo {
     /// out of view; `None` when none of it is visible.
     fn range_rect(&self, r: Range) -> Option<Rect> {
         let (first_col, last_col) = (self.cols.first()?.0, self.cols.last()?.0);
-        let (first_row, last_row) = (self.rows.first()?.0, self.rows.last()?.0);
+        let first_row = self.rows.iter().map(|k| k.0).min()?;
+        let last_row = self.rows.iter().map(|k| k.0).max()?;
         if r.end.col < first_col || r.start.col > last_col || r.end.row < first_row || r.start.row > last_row {
             return None;
         }
         let x0 = if r.start.col < first_col { self.cells.left() - 4.0 } else { self.cols.iter().find(|k| k.0 == r.start.col)?.1 };
         let x1 = if r.end.col > last_col { self.cells.right() + 4.0 } else { self.cols.iter().find(|k| k.0 == r.end.col)?.2 };
-        let y0 = if r.start.row < first_row { self.cells.top() - 4.0 } else { self.rows.iter().find(|k| k.0 == r.start.row)?.1 };
-        let y1 = if r.end.row > last_row { self.cells.bottom() + 4.0 } else { self.rows.iter().find(|k| k.0 == r.end.row)?.2 };
+        let y0 = match self.rows.iter().find(|k| k.0 == r.start.row) {
+            Some(k) => k.1,
+            None => self.cells.top() + self.frozen_h - 4.0,
+        };
+        let y1 = match self.rows.iter().find(|k| k.0 == r.end.row) {
+            Some(k) => k.2,
+            None => self.cells.bottom() + 4.0,
+        };
         Some(Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)))
     }
 
     /// The column whose right edge is within the resize grip of `x`.
     fn col_edge_at(&self, x: f32) -> Option<usize> {
         self.cols.iter().find(|(_, _, x1)| (x - x1).abs() <= RESIZE_GRIP).map(|c| c.0)
+    }
+
+    /// The row whose bottom edge is within the resize grip of `y`.
+    fn row_edge_at(&self, y: f32) -> Option<usize> {
+        self.rows.iter().find(|(_, _, y1)| (y - y1).abs() <= RESIZE_GRIP).map(|r| r.0)
     }
 
     /// How many rows are fully visible.
@@ -241,6 +260,10 @@ impl Geo {
 
 fn col_width(grid: &GridState, view: &DocView, c: usize) -> f32 {
     view.col_widths.get(&c).copied().unwrap_or(grid.default_col_width)
+}
+
+fn row_height(grid: &GridState, view: &DocView, r: usize) -> f32 {
+    view.row_heights.get(&r).copied().unwrap_or(grid.row_height)
 }
 
 /// Cell text as drawn on one line: line breaks become a pilcrow (a glyph egui's default font has).
@@ -258,23 +281,46 @@ pub fn looks_numeric(text: &str) -> bool {
     s.bytes().next().is_some_and(|b| b.is_ascii_digit() || b == b'-' || b == b'+' || b == b'.') && s.parse::<f64>().is_ok()
 }
 
+/// How many text lines a cell has (capped, so a pasted novel does not make a mile-high row).
+fn line_count(text: &str) -> usize {
+    text.split('\n').count().clamp(1, 40)
+}
+
+/// The height a row needs to show every line of its tallest cell.
+fn fit_height(lines: usize, base: f32) -> f32 {
+    if lines <= 1 { base } else { base + (lines - 1) as f32 * LINE_HEIGHT }
+}
+
 fn geometry(grid: &GridState, view: &mut DocView, rect: Rect) -> Geo {
     let z = grid.zoom;
     let rh = (grid.row_height * z).max(4.0);
-    let head_h = if view.doc.dialect.header { 38.0 } else { grid.header_height } * z;
+    let head_h = grid.header_height * z;
     let digits = view.extent_rows().to_string().len() as f32;
     let gutter_w = (digits * 8.0 + 16.0).max(40.0) * z;
     let cells = Rect::from_min_max(pos2(rect.left() + gutter_w, rect.top() + head_h), rect.max);
     view.refresh_visible();
-    let visible_rows = ((cells.height() / rh).floor().max(1.0)) as usize;
-    let max_scroll = view.display_count().saturating_sub(visible_rows);
-    view.scroll = view.scroll.min(max_scroll);
-    view.scroll_col = view.scroll_col.min(view.extent_cols().saturating_sub(1));
+    let frozen = view.freeze_top && view.display_count() > 1;
     let mut rows = Vec::new();
-    let (mut y, mut i) = (cells.top(), view.scroll);
+    let mut y = cells.top();
+    let mut frozen_h = 0.0;
+    if frozen {
+        let r = view.row_at_display(0);
+        let h = (row_height(grid, view, r) * z).max(4.0);
+        rows.push((r, y, y + h));
+        y += h;
+        frozen_h = h;
+    }
+    let min_scroll = usize::from(frozen);
+    let visible_rows = (((cells.height() - frozen_h) / rh).floor().max(1.0)) as usize;
+    let max_scroll = view.display_count().saturating_sub(visible_rows).max(min_scroll);
+    view.scroll = view.scroll.clamp(min_scroll, max_scroll);
+    view.scroll_col = view.scroll_col.min(view.extent_cols().saturating_sub(1));
+    let mut i = view.scroll;
     while y < cells.bottom() && rows.len() < 10_000 {
-        rows.push((view.row_at_display(i), y, y + rh));
-        y += rh;
+        let r = view.row_at_display(i);
+        let h = (row_height(grid, view, r) * z).max(4.0);
+        rows.push((r, y, y + h));
+        y += h;
         i = i.saturating_add(1);
     }
     let mut cols = Vec::new();
@@ -285,7 +331,7 @@ fn geometry(grid: &GridState, view: &mut DocView, rect: Rect) -> Geo {
         x += w;
         c = c.saturating_add(1);
     }
-    Geo { rect, cells, z, rh, cols, rows }
+    Geo { rect, cells, z, rh, frozen_h, cols, rows }
 }
 
 pub fn show(app: &mut EditorApp, ui: &mut egui::Ui, t: &Tokens) {
@@ -314,7 +360,7 @@ pub fn show(app: &mut EditorApp, ui: &mut egui::Ui, t: &Tokens) {
     let geo = geometry(grid, view, rect);
     paint(ui, &geo, view, t);
     vertical_scrollbar(view, ui, vtrack, &geo, t);
-    horizontal_scrollbar(grid, view, ui, htrack, &geo, t);
+    horizontal_scrollbar(view, ui, htrack, &geo, t);
     ui.painter().rect_filled(Rect::from_min_max(pos2(rect.right(), rect.bottom()), full.max), 0.0, t.tab_bar);
     editor_ui(grid, view, ui, &resp, &geo, t);
     resp.context_menu(|ui| match grid.context_zone {
@@ -396,7 +442,7 @@ fn editor_ui(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, grid_r
         return;
     };
     let z = geo.z;
-    let font = theme::cell_font(13.0 * z);
+    let font = theme::cell_font(CELL_FONT * z);
     let needed = ui.ctx().fonts_mut(|f| f.layout_no_wrap(ed.text.clone(), font.clone(), Color32::WHITE).size());
     let w = (needed.x + 14.0 * z).max(cell.width()).min((geo.cells.right() - cell.left()).max(cell.width()));
     let h = (needed.y + 6.0 * z).max(cell.height());
@@ -444,10 +490,12 @@ fn paint(ui: &egui::Ui, geo: &Geo, view: &DocView, t: &Tokens) {
     if let Some(active) = geo.cell_rect(view.sel.active) {
         body.rect_filled(active, 0.0, t.grid_bg);
     }
-    let font = theme::cell_font(13.0 * z);
+    let font = theme::cell_font(CELL_FONT * z);
     let pad = 4.0 * z;
     let table = &view.doc.table;
+    let header = view.doc.dialect.header;
     for &(r, y0, y1) in &geo.rows {
+        let tall = (y1 - y0) > geo.rh * 1.4;
         for &(c, x0, x1) in &geo.cols {
             let text = table.get(r, c);
             if text.is_empty() {
@@ -455,7 +503,14 @@ fn paint(ui: &egui::Ui, geo: &Geo, view: &DocView, t: &Tokens) {
             }
             let cell = Rect::from_min_max(pos2(x0, y0), pos2(x1, y1));
             let clip = cell.intersect(geo.cells).shrink2(vec2(pad, 0.0));
-            if clip.width() <= 0.0 {
+            if clip.width() <= 0.0 || clip.height() <= 0.0 {
+                continue;
+            }
+            let color = if header && r == 0 { t.header_text } else { t.cell_text };
+            if tall {
+                // A row sized to its content shows every line.
+                let shown = text.replace("\r\n", "\n").replace('\r', "\n");
+                p.with_clip_rect(clip).text(pos2(clip.left(), cell.top() + 3.0 * z), Align2::LEFT_TOP, shown, font.clone(), color);
                 continue;
             }
             let shown = display_text(text);
@@ -464,8 +519,13 @@ fn paint(ui: &egui::Ui, geo: &Geo, view: &DocView, t: &Tokens) {
             } else {
                 (pos2(clip.left(), cell.center().y), Align2::LEFT_CENTER)
             };
-            p.with_clip_rect(clip).text(pos, anchor, shown, font.clone(), t.cell_text);
+            p.with_clip_rect(clip).text(pos, anchor, shown, font.clone(), color);
         }
+    }
+    if header && let Some(&(0, y0, y1)) = geo.rows.iter().find(|k| k.0 == 0) {
+        // The header row reads as one: a soft band behind it.
+        let band = Rect::from_min_max(pos2(geo.cells.left(), y0), pos2(geo.cells.right(), y1));
+        body.rect_filled(band, 0.0, t.sel_fill.linear_multiply(0.5));
     }
     let gl = Stroke::new(1.0, t.gridline);
     for &(_, _, x1) in &geo.cols {
@@ -473,6 +533,9 @@ fn paint(ui: &egui::Ui, geo: &Geo, view: &DocView, t: &Tokens) {
     }
     for &(_, _, y1) in &geo.rows {
         body.hline(geo.cells.x_range(), y1, gl);
+    }
+    if geo.frozen_h > 0.0 {
+        body.hline(geo.cells.x_range(), geo.cells.top() + geo.frozen_h, Stroke::new(1.5, t.header_line));
     }
     if let Some(rect) = geo.range_rect(view.sel.current()) {
         body.rect_stroke(rect, 0.0, Stroke::new(2.0 * z.max(0.75), t.sel_border), StrokeKind::Inside);
@@ -488,12 +551,10 @@ fn paint_headers(p: &egui::Painter, geo: &Geo, view: &DocView, t: &Tokens) {
     p.rect_filled(head, 0.0, t.header_bg);
     p.rect_filled(gutter, 0.0, t.header_bg);
     let hl = Stroke::new(1.0, t.header_line);
-    let (rows_total, cols_total, body_start) = (view.extent_rows(), view.extent_cols(), view.body_start());
+    let (rows_total, cols_total) = (view.extent_rows(), view.extent_cols());
     let sel = &view.sel;
     let label_font = theme::ui_font(12.0 * z);
-    let small_font = theme::ui_font(10.0 * z);
-    let name_font = theme::ui_font(13.0 * z);
-    let whole_col = |c: usize| sel.ranges.iter().any(|r| r.cols().contains(&c) && r.start.row <= body_start && r.end.row + 1 >= rows_total);
+    let whole_col = |c: usize| sel.ranges.iter().any(|r| r.cols().contains(&c) && r.start.row == 0 && r.end.row + 1 >= rows_total);
     let whole_row = |r: usize| sel.ranges.iter().any(|g| g.rows().contains(&r) && g.start.col == 0 && g.end.col + 1 >= cols_total);
     for &(c, x0, x1) in &geo.cols {
         let r = Rect::from_min_max(pos2(x0, rect.top()), pos2(x1, geo.cells.top()));
@@ -506,16 +567,13 @@ fn paint_headers(p: &egui::Painter, geo: &Geo, view: &DocView, t: &Tokens) {
             p.rect_filled(r.intersect(head), 0.0, t.accent_soft);
         }
         let color = if selected { t.header_sel_text } else { t.header_text };
-        let clip = p.with_clip_rect(r.intersect(head).shrink2(vec2(3.0 * z, 0.0)));
-        if view.doc.dialect.header {
-            clip.text(pos2(r.center().x, r.top() + 9.0 * z), Align2::CENTER_CENTER, column_label(c), small_font.clone(), t.text_dim);
-            let name = view.header_name(c);
-            if !name.is_empty() {
-                clip.text(pos2(r.center().x, r.top() + 26.0 * z), Align2::CENTER_CENTER, display_text(name), name_font.clone(), color);
-            }
-        } else {
-            clip.text(r.center(), Align2::CENTER_CENTER, column_label(c), label_font.clone(), color);
-        }
+        p.with_clip_rect(r.intersect(head).shrink2(vec2(3.0 * z, 0.0))).text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            column_label(c),
+            label_font.clone(),
+            color,
+        );
         p.vline(x1, head.y_range(), hl);
     }
     for &(r, y0, y1) in &geo.rows {
@@ -552,19 +610,27 @@ fn pick(view: &mut DocView, range: Range, active: CellRef, shift_to: CellRef, mo
     }
 }
 
+/// The columns a double-click on `col`'s edge fits: every selected column when the edge belongs
+/// to one, else just that column.
+fn autofit_targets(view: &DocView, index: usize, by_rows: bool) -> Vec<usize> {
+    let selected = if by_rows { crate::ops::selected_rows(view) } else { crate::ops::selected_cols(view) };
+    if selected.binary_search(&index).is_ok() { selected } else { vec![index] }
+}
+
 fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &Response, geo: &Geo) {
     let mods = ui.input(|i| i.modifiers);
     let max = view.max_cell();
-    let body_start = view.body_start();
-    let clamp = |c: CellRef| CellRef::new(c.row.clamp(body_start, max.row), c.col.min(max.col));
+    let clamp = |c: CellRef| CellRef::new(c.row.min(max.row), c.col.min(max.col));
     let in_head = |p: Pos2| p.y < geo.cells.top() && p.x >= geo.cells.left();
     let in_gutter = |p: Pos2| p.x < geo.cells.left() && p.y >= geo.cells.top();
     let in_corner = |p: Pos2| p.x < geo.cells.left() && p.y < geo.cells.top();
 
-    if let Some(h) = resp.hover_pos()
-        && (matches!(grid.drag, Some(Drag::Resize { .. })) || (grid.drag.is_none() && in_head(h) && geo.col_edge_at(h.x).is_some()))
-    {
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeColumn);
+    if let Some(h) = resp.hover_pos() {
+        if matches!(grid.drag, Some(Drag::ColResize { .. })) || (grid.drag.is_none() && in_head(h) && geo.col_edge_at(h.x).is_some()) {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeColumn);
+        } else if matches!(grid.drag, Some(Drag::RowResize { .. })) || (grid.drag.is_none() && in_gutter(h) && geo.row_edge_at(h.y).is_some()) {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeRow);
+        }
     }
 
     if resp.double_clicked()
@@ -573,11 +639,13 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
         grid.drag = None;
         if in_head(p) {
             if let Some(col) = geo.col_edge_at(p.x) {
-                autofit(grid, view, ui, col);
-            } else if view.doc.dialect.header
-                && let Some(col) = geo.col_at(p.x)
-            {
-                grid.rename_request = Some(col);
+                autofit_cols(grid, view, ui, &autofit_targets(view, col, false));
+            }
+            return;
+        }
+        if in_gutter(p) {
+            if let Some(row) = geo.row_edge_at(p.y) {
+                autofit_rows(grid, view, &autofit_targets(view, row, true));
             }
             return;
         }
@@ -605,15 +673,15 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
                 grid.context_zone = Zone::Head;
                 if let Some(c) = geo.col_at(p.x) {
                     let c = c.min(max.col);
-                    if !view.sel.ranges.iter().any(|r| r.cols().contains(&c) && r.start.row <= body_start && r.end.row >= max.row) {
-                        let top = CellRef::new(body_start, c);
+                    if !view.sel.ranges.iter().any(|r| r.cols().contains(&c) && r.start.row == 0 && r.end.row >= max.row) {
+                        let top = CellRef::new(0, c);
                         view.sel = Selection { active: top, anchor: top, ranges: vec![Range::new(top, CellRef::new(max.row, c))] };
                     }
                 }
             } else if in_gutter(p) {
                 grid.context_zone = Zone::Gutter;
                 if let Some(r) = geo.row_at(p.y) {
-                    let r = r.clamp(body_start, max.row);
+                    let r = r.min(max.row);
                     if !view.sel.ranges.iter().any(|g| g.rows().contains(&r) && g.start.col == 0 && g.end.col >= max.col) {
                         let left = CellRef::new(r, 0);
                         view.sel = Selection { active: left, anchor: left, ranges: vec![Range::new(left, CellRef::new(r, max.col))] };
@@ -630,23 +698,27 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
             return;
         }
         if in_corner(p) {
-            let all = Range::new(CellRef::new(body_start, 0), max);
-            view.sel = Selection { active: CellRef::new(body_start, 0), anchor: CellRef::new(body_start, 0), ranges: vec![all] };
+            let all = Range::new(CellRef::default(), max);
+            view.sel = Selection { active: CellRef::default(), anchor: CellRef::default(), ranges: vec![all] };
             grid.drag = None;
         } else if in_head(p) {
             if let Some(col) = geo.col_edge_at(p.x) {
                 if dragging {
-                    grid.drag = Some(Drag::Resize { col, start_x: p.x, start_w: col_width(grid, view, col) });
+                    grid.drag = Some(Drag::ColResize { col, start_x: p.x, start_w: col_width(grid, view, col) });
                 }
             } else if let Some(c) = geo.col_at(p.x) {
                 let c = c.min(max.col);
-                let top = CellRef::new(body_start, c);
+                let top = CellRef::new(0, c);
                 pick(view, Range::new(top, CellRef::new(max.row, c)), top, CellRef::new(max.row, c), mods);
                 grid.drag = dragging.then_some(Drag::Cols);
             }
         } else if in_gutter(p) {
-            if let Some(r) = geo.row_at(p.y) {
-                let r = r.clamp(body_start, max.row);
+            if let Some(row) = geo.row_edge_at(p.y) {
+                if dragging {
+                    grid.drag = Some(Drag::RowResize { row, start_y: p.y, start_h: row_height(grid, view, row) });
+                }
+            } else if let Some(r) = geo.row_at(p.y) {
+                let r = r.min(max.row);
                 let left = CellRef::new(r, 0);
                 pick(view, Range::new(left, CellRef::new(r, max.col)), left, CellRef::new(r, max.col), mods);
                 grid.drag = dragging.then_some(Drag::Rows);
@@ -669,7 +741,7 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
             }
             Some(Drag::Rows) => {
                 if let Some(c) = geo.cell_near(p) {
-                    view.sel.extend_to(CellRef::new(c.row.clamp(body_start, max.row), max.col));
+                    view.sel.extend_to(CellRef::new(c.row.min(max.row), max.col));
                 }
             }
             Some(Drag::Cols) => {
@@ -677,14 +749,18 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
                     view.sel.extend_to(CellRef::new(max.row, c.col.min(max.col)));
                 }
             }
-            Some(Drag::Resize { col, start_x, start_w }) => {
+            Some(Drag::ColResize { col, start_x, start_w }) => {
                 let w = (start_w + (p.x - start_x) / geo.z).clamp(MIN_COL_WIDTH, MAX_COL_WIDTH);
                 view.col_widths.insert(col, w);
+            }
+            Some(Drag::RowResize { row, start_y, start_h }) => {
+                let h = (start_h + (p.y - start_y) / geo.z).clamp(MIN_ROW_HEIGHT, MAX_ROW_HEIGHT);
+                view.row_heights.insert(row, h);
             }
             None => {}
         }
         // Dragging past an edge scrolls.
-        if grid.drag.is_some() && !matches!(grid.drag, Some(Drag::Resize { .. })) {
+        if matches!(grid.drag, Some(Drag::Cells | Drag::Rows | Drag::Cols)) {
             if p.y > geo.cells.bottom() {
                 view.scroll = view.scroll.saturating_add(1);
             } else if p.y < geo.cells.top() && !matches!(grid.drag, Some(Drag::Cols)) {
@@ -730,7 +806,6 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
 
 fn step(view: &mut DocView, dr: i64, dc: i64, shift: bool, jump: bool) {
     let max = view.max_cell();
-    let body_start = view.body_start();
     let from = if shift { view.sel.moving_end() } else { view.sel.active };
     let to = if jump {
         let t = selection::jump(&view.doc.table, from, dr, dc, max);
@@ -743,7 +818,6 @@ fn step(view: &mut DocView, dr: i64, dc: i64, shift: bool, jump: bool) {
     } else {
         from.offset(dr, dc, max)
     };
-    let to = CellRef::new(to.row.max(body_start), to.col);
     if shift { view.sel.extend_to(to) } else { view.sel = Selection::at(to) }
 }
 
@@ -784,7 +858,6 @@ fn keyboard(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, geo: &G
     if keys.is_empty() {
         return;
     }
-    let body_start = view.body_start();
     let page = geo.full_rows().saturating_sub(1).max(1) as i64;
     for (key, m) in keys {
         let (ctrl, shift, alt) = (m.command, m.shift, m.alt);
@@ -816,13 +889,13 @@ fn keyboard(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, geo: &G
             Key::PageUp => step(view, -page, 0, shift, false),
             Key::Home => {
                 let from = if shift { view.sel.moving_end() } else { view.sel.active };
-                let dr = if ctrl { body_start as i64 - from.row as i64 } else { 0 };
+                let dr = if ctrl { -(from.row as i64) } else { 0 };
                 step(view, dr, -(from.col as i64), shift, false);
             }
             Key::End => {
                 let from = if shift { view.sel.moving_end() } else { view.sel.active };
                 let table = &view.doc.table;
-                let (last_row, last_col) = (table.row_count().saturating_sub(1).max(body_start), table.width().saturating_sub(1));
+                let (last_row, last_col) = (table.row_count().saturating_sub(1), table.width().saturating_sub(1));
                 let (dr, dc) = if ctrl {
                     (last_row as i64 - from.row as i64, last_col as i64 - from.col as i64)
                 } else {
@@ -844,11 +917,7 @@ fn keyboard(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, geo: &G
             Key::A if ctrl => {
                 let table = &view.doc.table;
                 let region = selection::current_region(table, view.sel.active);
-                let region = Range::new(CellRef::new(region.start.row.max(body_start), region.start.col), region.end);
-                let whole = Range::new(
-                    CellRef::new(body_start, 0),
-                    CellRef::new(table.row_count().saturating_sub(1).max(body_start), table.width().saturating_sub(1)),
-                );
+                let whole = Range::new(CellRef::default(), CellRef::new(table.row_count().saturating_sub(1), table.width().saturating_sub(1)));
                 let target = if region.is_single() || view.sel.current() == region { whole } else { region };
                 let active = view.sel.active;
                 view.sel = Selection { active, anchor: active, ranges: vec![target] };
@@ -863,12 +932,16 @@ fn keyboard(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, geo: &G
 /// Scrolls so the active cell is fully visible.
 fn ensure_visible(grid: &GridState, view: &mut DocView, geo: &Geo) {
     let a = view.sel.active;
-    let full_rows = geo.full_rows();
     let d = view.display_of_row(a.row);
-    if d < view.scroll {
-        view.scroll = d;
-    } else if d >= view.scroll + full_rows {
-        view.scroll = d + 1 - full_rows;
+    let frozen = view.freeze_top && view.display_count() > 1;
+    if !(frozen && d == 0) {
+        let min_scroll = usize::from(frozen);
+        let full_rows = geo.full_rows().saturating_sub(usize::from(frozen)).max(1);
+        if d < view.scroll {
+            view.scroll = d.max(min_scroll);
+        } else if d >= view.scroll + full_rows {
+            view.scroll = (d + 1 - full_rows).max(min_scroll);
+        }
     }
     if a.col < view.scroll_col {
         view.scroll_col = a.col;
@@ -884,23 +957,56 @@ fn ensure_visible(grid: &GridState, view: &mut DocView, geo: &Geo) {
     }
 }
 
-/// Sizes the column to its widest text (sampling the first few thousand rows).
-pub fn autofit(grid: &GridState, view: &mut DocView, ui: &egui::Ui, col: usize) {
-    let font = theme::cell_font(13.0);
+/// Sizes the columns to their widest text (sampling the first few thousand rows).
+pub fn autofit_cols(grid: &GridState, view: &mut DocView, ui: &egui::Ui, cols: &[usize]) {
+    let font = theme::cell_font(CELL_FONT);
     let table = &view.doc.table;
     let rows = table.row_count().min(5000);
-    let mut widest: f32 = 0.0;
+    let mut widths = Vec::with_capacity(cols.len());
     ui.ctx().fonts_mut(|f| {
-        for r in 0..rows {
-            let text = table.get(r, col);
-            if text.is_empty() {
-                continue;
+        for &col in cols.iter().take(10_000) {
+            let mut widest: f32 = 0.0;
+            for r in 0..rows {
+                let text = table.get(r, col);
+                if text.is_empty() {
+                    continue;
+                }
+                let widest_line = text
+                    .split('\n')
+                    .map(|line| f.layout_no_wrap(display_text(line).into_owned(), font.clone(), Color32::WHITE).size().x)
+                    .fold(0.0, f32::max);
+                widest = widest.max(widest_line);
             }
-            widest = widest.max(f.layout_no_wrap(display_text(text).into_owned(), font.clone(), Color32::WHITE).size().x);
+            widths.push((col, if widest > 0.0 { widest + 12.0 } else { grid.default_col_width }));
         }
     });
-    let w = if widest > 0.0 { widest + 12.0 } else { grid.default_col_width };
-    view.col_widths.insert(col, w.clamp(MIN_COL_WIDTH, MAX_COL_WIDTH));
+    for (col, w) in widths {
+        view.col_widths.insert(col, w.clamp(MIN_COL_WIDTH, MAX_COL_WIDTH));
+    }
+}
+
+/// Sizes the rows to show every line of their cells; a one-line row goes back to the default.
+pub fn autofit_rows(grid: &GridState, view: &mut DocView, rows: &[usize]) {
+    let table = &view.doc.table;
+    let mut heights = Vec::with_capacity(rows.len());
+    for &r in rows.iter().take(100_000) {
+        let lines = table.row(r).map_or(1, |row| row.iter().map(|c| line_count(c)).max().unwrap_or(1));
+        heights.push((r, lines));
+    }
+    for (r, lines) in heights {
+        if lines <= 1 {
+            view.row_heights.remove(&r);
+        } else {
+            view.row_heights.insert(r, fit_height(lines, grid.row_height).clamp(MIN_ROW_HEIGHT, MAX_ROW_HEIGHT));
+        }
+    }
+}
+
+/// Puts the rows back at the default height.
+pub fn reset_row_heights(view: &mut DocView, rows: &[usize]) {
+    for r in rows {
+        view.row_heights.remove(r);
+    }
 }
 
 fn thumb_colour(resp: &Response, t: &Tokens) -> Color32 {
@@ -908,10 +1014,11 @@ fn thumb_colour(resp: &Response, t: &Tokens) -> Color32 {
 }
 
 fn vertical_scrollbar(view: &mut DocView, ui: &mut egui::Ui, track: Rect, geo: &Geo, t: &Tokens) {
-    let visible = geo.full_rows() as f32;
-    let extent = view.display_count() as f32;
+    let min_scroll = usize::from(geo.frozen_h > 0.0);
+    let visible = geo.full_rows().saturating_sub(min_scroll).max(1) as f32;
+    let extent = view.display_count().saturating_sub(min_scroll) as f32;
     let max_scroll = (extent - visible).max(0.0);
-    let scroll = view.scroll as f32;
+    let scroll = view.scroll.saturating_sub(min_scroll) as f32;
     let id = ui.scope_id().with("vscroll");
     let resp = ui.interact(track, id, Sense::CLICK | Sense::DRAG);
     ui.painter().rect_filled(track, 0.0, t.tab_bar);
@@ -942,12 +1049,12 @@ fn vertical_scrollbar(view: &mut DocView, ui: &mut egui::Ui, track: Rect, geo: &
     }
     let next = next.round().clamp(0.0, max_scroll);
     if next != scroll {
-        view.scroll = next as usize;
+        view.scroll = min_scroll + next as usize;
         ui.ctx().request_repaint();
     }
 }
 
-fn horizontal_scrollbar(grid: &GridState, view: &mut DocView, ui: &mut egui::Ui, track: Rect, geo: &Geo, t: &Tokens) {
+fn horizontal_scrollbar(view: &mut DocView, ui: &mut egui::Ui, track: Rect, geo: &Geo, t: &Tokens) {
     let visible = geo.full_cols() as f32;
     let extent = view.extent_cols() as f32;
     let max_scroll = (extent - visible).max(0.0);
@@ -980,7 +1087,6 @@ fn horizontal_scrollbar(grid: &GridState, view: &mut DocView, ui: &mut egui::Ui,
             next += visible;
         }
     }
-    let _ = grid;
     let next = next.round().clamp(0.0, max_scroll);
     if next != scroll {
         view.scroll_col = next as usize;
@@ -991,6 +1097,11 @@ fn horizontal_scrollbar(grid: &GridState, view: &mut DocView, ui: &mut egui::Ui,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use csv_editor_table::{Document, ParseOptions};
+
+    fn view(text: &str) -> DocView {
+        DocView::new(Document::from_bytes(text.as_bytes(), &ParseOptions::default()).unwrap())
+    }
 
     #[test]
     fn numbers_are_recognised_conservatively() {
@@ -1019,9 +1130,7 @@ mod tests {
 
     #[test]
     fn geometry_clamps_scroll_and_fills_the_viewport() {
-        use csv_editor_table::{Document, ParseOptions};
-        let doc = Document::from_bytes(b"h1,h2\n1,2\n3,4\n", &ParseOptions::default()).unwrap();
-        let mut view = DocView::new(doc);
+        let mut view = view("h1,h2\n1,2\n3,4\n");
         let grid = GridState::default();
         view.scroll = 999; // far past the end: clamped so the last rows fill the view
         view.scroll_col = 999;
@@ -1031,10 +1140,39 @@ mod tests {
         assert!(geo.rows.len() >= 10 && !geo.cols.is_empty());
         view.scroll = 0;
         let geo = geometry(&grid, &mut view, Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)));
-        assert_eq!(geo.rows.first().map(|r| r.0), Some(1), "the header row is not in the body");
+        assert_eq!(geo.rows.first().map(|r| r.0), Some(0), "row 1 is in the grid");
         assert!(geo.cell_at(geo.cells.min).is_some());
         assert!(geo.cell_at(pos2(-1.0, -1.0)).is_none());
         let far = Range::new(CellRef::new(500, 500), CellRef::new(600, 600));
         assert!(geo.range_rect(far).is_none());
+    }
+
+    #[test]
+    fn a_frozen_top_row_stays_while_the_rest_scrolls() {
+        let mut view = view("h\n1\n2\n3\n4\n5\n");
+        let grid = GridState::default();
+        view.freeze_top = true;
+        view.scroll = 3;
+        let geo = geometry(&grid, &mut view, Rect::from_min_size(Pos2::ZERO, vec2(300.0, 200.0)));
+        assert_eq!(geo.rows.first().map(|r| r.0), Some(0), "the frozen row comes first");
+        assert_eq!(geo.rows.get(1).map(|r| r.0), Some(3), "then the scrolled-to row");
+        assert!(geo.frozen_h > 0.0);
+        view.scroll = 0;
+        let geo = geometry(&grid, &mut view, Rect::from_min_size(Pos2::ZERO, vec2(300.0, 200.0)));
+        assert_eq!(view.scroll, 1, "scrolling never puts a second copy of the frozen row under it");
+        assert_eq!(geo.rows.get(1).map(|r| r.0), Some(1));
+    }
+
+    #[test]
+    fn row_autofit_follows_line_counts() {
+        let mut view = view("a,b\none,two\nthree\nlines,x\n");
+        view.doc.set_cell(1, 1, "two\nlines\nhere");
+        let grid = GridState::default();
+        autofit_rows(&grid, &mut view, &[0, 1, 2]);
+        assert!(!view.row_heights.contains_key(&0), "a one-line row keeps the default height");
+        assert_eq!(view.row_heights.get(&1).copied(), Some(fit_height(3, grid.row_height)));
+        reset_row_heights(&mut view, &[1]);
+        assert!(view.row_heights.is_empty());
+        assert_eq!(line_count("x\n".repeat(100).as_str()), 40, "capped");
     }
 }

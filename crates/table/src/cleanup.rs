@@ -52,18 +52,23 @@ impl Case {
     }
 }
 
-/// Row indices as descending runs of deletions, so each deletion leaves the earlier indices valid.
-fn delete_rows_edits(mut rows: Vec<usize>) -> Vec<Edit> {
-    rows.sort_unstable();
-    rows.dedup();
+/// Sorted indices as runs of consecutive values, `(first, count)`.
+pub(crate) fn runs(sorted: &[usize]) -> Vec<(usize, usize)> {
     let mut runs: Vec<(usize, usize)> = Vec::new();
-    for r in rows {
+    for &i in sorted {
         match runs.last_mut() {
-            Some((start, count)) if *start + *count == r => *count += 1,
-            _ => runs.push((r, 1)),
+            Some((start, count)) if *start + *count == i => *count += 1,
+            _ => runs.push((i, 1)),
         }
     }
-    runs.into_iter().rev().map(|(at, count)| Edit::DeleteRows { at, count }).collect()
+    runs
+}
+
+/// Row indices as descending runs of deletions, so each deletion leaves the earlier indices valid.
+pub(crate) fn delete_rows_edits(mut rows: Vec<usize>) -> Vec<Edit> {
+    rows.sort_unstable();
+    rows.dedup();
+    runs(&rows).into_iter().rev().map(|(at, count)| Edit::DeleteRows { at, count }).collect()
 }
 
 impl Document {
@@ -107,17 +112,7 @@ impl Document {
         let table = &self.table;
         let empty: Vec<usize> =
             (0..table.width()).filter(|&c| table.rows().iter().all(|row| row.get(c).is_none_or(|x| x.trim().is_empty()))).collect();
-        let mut edits = Vec::new();
-        let mut runs: Vec<(usize, usize)> = Vec::new();
-        for c in &empty {
-            match runs.last_mut() {
-                Some((start, count)) if *start + *count == *c => *count += 1,
-                _ => runs.push((*c, 1)),
-            }
-        }
-        for (at, count) in runs.into_iter().rev() {
-            edits.push(Edit::DeleteCols { at, count });
-        }
+        let edits: Vec<Edit> = runs(&empty).into_iter().rev().map(|(at, count)| Edit::DeleteCols { at, count }).collect();
         let n = empty.len();
         if n > 0 && self.apply("Remove empty columns", Edit::Batch(edits)) { n } else { 0 }
     }

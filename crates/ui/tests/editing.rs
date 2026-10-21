@@ -50,9 +50,21 @@ fn active(h: &Harness<'_, EditorApp>) -> CellRef {
 }
 
 #[test]
+fn row_one_is_in_the_grid_and_renaming_a_column_is_just_typing() {
+    let mut h = harness(app("h1,h2\r\n1,2\r\n"));
+    assert_eq!(active(&h), CellRef::new(0, 0), "A1 is selected at start");
+    type_text(&mut h, "id");
+    press(&mut h, Key::Enter);
+    h.run();
+    assert_eq!(cell(&h, 0, 0), "id", "the header row is edited like any other");
+    assert_eq!(h.state().docs[0].column_title(0), "A (id)");
+}
+
+#[test]
 fn typing_enter_and_undo_edit_the_table() {
     let mut h = harness(app("h1,h2\r\n1,2\r\n3,4\r\n"));
-    assert_eq!(active(&h), CellRef::new(1, 0), "the first body cell is selected");
+    press(&mut h, Key::ArrowDown);
+    assert_eq!(active(&h), CellRef::new(1, 0));
     type_text(&mut h, "99");
     assert!(h.state().grid.editor.is_some(), "typing opens the editor");
     press(&mut h, Key::Enter);
@@ -72,6 +84,7 @@ fn typing_enter_and_undo_edit_the_table() {
 #[test]
 fn escape_cancels_and_arrows_commit_in_replace_mode() {
     let mut h = harness(app("a,b\r\n1,2\r\n"));
+    press(&mut h, Key::ArrowDown);
     type_text(&mut h, "zzz");
     press(&mut h, Key::Escape);
     h.run();
@@ -98,10 +111,10 @@ fn escape_cancels_and_arrows_commit_in_replace_mode() {
 #[test]
 fn typing_past_the_table_grows_it_and_alt_arrows_move_rows() {
     let mut h = harness(app("a\r\nb\r\nc\r\n"));
-    // Header on: body starts at row 1. Jump to the blank row after the data and type.
-    press(&mut h, Key::ArrowDown);
-    press(&mut h, Key::ArrowDown);
-    assert_eq!(active(&h), CellRef::new(3, 0));
+    for _ in 0..3 {
+        press(&mut h, Key::ArrowDown);
+    }
+    assert_eq!(active(&h), CellRef::new(3, 0), "the blank row after the data");
     type_text(&mut h, "d");
     press(&mut h, Key::Enter);
     h.run();
@@ -114,11 +127,17 @@ fn typing_past_the_table_grows_it_and_alt_arrows_move_rows() {
     assert_eq!((cell(&h, 2, 0), cell(&h, 3, 0)), ("d".to_string(), "c".to_string()));
     assert_eq!(active(&h), CellRef::new(2, 0), "the selection travels with the row");
     assert_eq!(String::from_utf8(h.state().docs[0].doc.to_bytes().0).unwrap(), "a\r\nb\r\nd\r\nc\r\n");
+    // The header row stays first.
+    press(&mut h, Key::ArrowUp);
+    press_with(&mut h, Modifiers::ALT, Key::ArrowUp);
+    h.run();
+    assert_eq!(cell(&h, 0, 0), "a");
 }
 
 #[test]
 fn copy_cut_and_paste_move_blocks_of_cells() {
     let mut h = harness(app("a,b,c\r\n1,2,3\r\n4,5,6\r\n"));
+    press(&mut h, Key::ArrowDown);
     press_with(&mut h, Modifiers::SHIFT, Key::ArrowRight);
     h.input_mut().events.push(Event::Copy);
     h.step();
@@ -156,7 +175,7 @@ fn copy_cut_and_paste_move_blocks_of_cells() {
 fn find_sort_and_filter_work_through_the_interface() {
     use csv_editor_ui::{Filter, FilterKind};
     let mut h = harness(app("name,city\r\nBob,Oslo\r\nAnn,Berlin\r\nCy,Oslo\r\nDee,Lisbon\r\n"));
-    // Find: "oslo" from the first cell lands on B2, then wraps through B4.
+    // Find: "oslo" from A1 lands on B2, then B4.
     {
         let EditorApp { find, grid, docs, active, .. } = h.state_mut();
         find.opts.query = "oslo".to_string();
@@ -168,7 +187,7 @@ fn find_sort_and_filter_work_through_the_interface() {
         assert!(find.next(grid, &mut docs[*active], true));
     }
     assert_eq!(active(&h), CellRef::new(3, 1));
-    // Replace all in the column scope.
+    // Replace all.
     {
         let EditorApp { find, grid, docs, active, .. } = h.state_mut();
         find.replacement = "Bergen".to_string();
@@ -176,23 +195,25 @@ fn find_sort_and_filter_work_through_the_interface() {
         assert_eq!(find.status, "2 replaced");
     }
     assert_eq!(cell(&h, 1, 1), "Bergen");
-    // Sort by name (column A) ascending.
+    // Sort by name (column A) ascending: the header row stays put.
     press(&mut h, Key::Home);
     {
         let EditorApp { grid, docs, active, .. } = h.state_mut();
         assert!(csv_editor_ui::ops::sort(grid, &mut docs[*active], true, csv_editor_table::SortKind::Text));
     }
     h.run();
+    assert_eq!(cell(&h, 0, 0), "name");
     assert_eq!((cell(&h, 1, 0), cell(&h, 2, 0), cell(&h, 3, 0), cell(&h, 4, 0)), ("Ann".into(), "Bob".into(), "Cy".into(), "Dee".into()));
-    // Filter to Bergen rows (Bob, Cy): arrow keys skip the hidden rows.
+    // Filter to Bergen rows (Bob, Cy): the header stays visible, arrows skip the hidden rows.
     h.state_mut().docs[0].set_filter(Filter { col: 1, kind: FilterKind::Equals, text: "bergen".to_string() });
     h.run();
     assert_eq!(h.state().docs[0].visible_count(), 2);
     press_with(&mut h, Modifiers::COMMAND, Key::Home);
-    assert_eq!(active(&h), CellRef::new(2, 0), "Ann's row is hidden; Ctrl+Home lands on the first visible row");
-    assert_eq!(cell(&h, 2, 0), "Bob");
+    assert_eq!(active(&h), CellRef::new(0, 0), "Ctrl+Home goes to A1, the header row");
     press(&mut h, Key::ArrowDown);
     h.run();
+    assert_eq!(active(&h), CellRef::new(2, 0), "Ann (hidden) is skipped: Bob");
+    press(&mut h, Key::ArrowDown);
     assert_eq!(active(&h), CellRef::new(3, 0));
     assert_eq!(cell(&h, 3, 0), "Cy");
     press(&mut h, Key::ArrowDown);

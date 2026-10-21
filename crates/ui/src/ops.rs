@@ -1,5 +1,8 @@
 //! Editing operations on a document, driven by its selection. Shared by the menu bar, the grid's
 //! context menu and the keyboard shortcuts, so each exists once.
+//!
+//! Row and column operations act on exactly the rows (columns) that contain a selected cell,
+//! never on the gap between disconnected selections; the menu items say which ones.
 
 use csv_editor_table::{Case, Cell, CellRef, Range, Row, Selection, SortKind, SortSpec, io};
 use egui::{Button, Ui};
@@ -67,18 +70,93 @@ pub fn paste(grid: &mut GridState, view: &mut DocView, text: Option<String>) -> 
     }
 }
 
-fn bounds(view: &DocView) -> Range {
-    view.sel.bounds()
+// ----- Which rows and columns an operation means -------------------------------------------------
+
+/// Sorted, distinct rows that contain a selected cell (blank rows past the table included).
+pub fn selected_rows(view: &DocView) -> Vec<usize> {
+    let mut rows: Vec<usize> = view.sel.ranges.iter().flat_map(|r| r.rows()).collect();
+    rows.sort_unstable();
+    rows.dedup();
+    rows
+}
+
+/// Sorted, distinct columns that contain a selected cell.
+pub fn selected_cols(view: &DocView) -> Vec<usize> {
+    let mut cols: Vec<usize> = view.sel.ranges.iter().flat_map(|r| r.cols()).collect();
+    cols.sort_unstable();
+    cols.dedup();
+    cols
+}
+
+/// Whether every selected range spans every row: whole columns are selected, so an operation
+/// on "the selected rows" has no meaning.
+fn whole_columns_selected(view: &DocView) -> bool {
+    let max = view.max_cell();
+    view.sel.ranges.iter().all(|r| r.start.row == 0 && r.end.row >= max.row)
+}
+
+fn whole_rows_selected(view: &DocView) -> bool {
+    let max = view.max_cell();
+    view.sel.ranges.iter().all(|r| r.start.col == 0 && r.end.col >= max.col)
+}
+
+/// Selected rows that exist in the table (the ones a deletion or duplication can touch).
+fn existing_rows(view: &DocView) -> Vec<usize> {
+    let n = view.doc.table.row_count();
+    selected_rows(view).into_iter().filter(|&r| r < n).collect()
+}
+
+fn existing_cols(view: &DocView) -> Vec<usize> {
+    let w = view.doc.table.width();
+    selected_cols(view).into_iter().filter(|&c| c < w).collect()
+}
+
+fn contiguous(idx: &[usize]) -> bool {
+    idx.windows(2).all(|w| w[1] == w[0] + 1)
+}
+
+/// Runs of consecutive indices as `(first, count)`.
+fn runs(idx: &[usize]) -> Vec<(usize, usize)> {
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for &i in idx {
+        match runs.last_mut() {
+            Some((start, count)) if *start + *count == i => *count += 1,
+            _ => runs.push((i, 1)),
+        }
+    }
+    runs
+}
+
+/// Human description of indices, 1-based: "row 5", "rows 2, 5–6", or "12 rows" when there are
+/// many runs.
+pub fn describe(idx: &[usize], what: &str, label: impl Fn(usize) -> String) -> String {
+    if idx.is_empty() {
+        return format!("no {what}s");
+    }
+    let runs = runs(idx);
+    if runs.len() > 4 {
+        return format!("{} {what}s", idx.len());
+    }
+    let parts: Vec<String> = runs.iter().map(|(s, n)| if *n == 1 { label(*s) } else { format!("{}–{}", label(*s), label(s + n - 1)) }).collect();
+    format!("{what}{} {}", if idx.len() == 1 { "" } else { "s" }, parts.join(", "))
+}
+
+fn row_label(r: usize) -> String {
+    (r + 1).to_string()
+}
+
+fn describe_rows(rows: &[usize]) -> String {
+    describe(rows, "row", row_label)
+}
+
+fn describe_cols(cols: &[usize]) -> String {
+    describe(cols, "column", csv_editor_table::column_label)
 }
 
 /// Moves every part of the selection by (`dr`, `dc`), clamped to the grid.
 fn shift_selection(view: &mut DocView, dr: i64, dc: i64) {
     let max = view.max_cell();
-    let body = view.body_start() as i64;
-    let mv = |c: CellRef| {
-        let moved = c.offset(dr, dc, max);
-        CellRef::new(moved.row.max(body as usize), moved.col)
-    };
+    let mv = |c: CellRef| c.offset(dr, dc, max);
     view.sel.active = mv(view.sel.active);
     view.sel.anchor = mv(view.sel.anchor);
     for r in &mut view.sel.ranges {
@@ -113,48 +191,58 @@ pub fn fill_down(grid: &mut GridState, view: &mut DocView) -> bool {
     view.doc.fill_down(view.sel.current())
 }
 
+// ----- Rows ----------------------------------------------------------------------------------
+
+/// Inserts as many blank rows as are selected, above the topmost selected row.
 pub fn insert_rows_above(grid: &mut GridState, view: &mut DocView) -> bool {
     grid::commit_edit(grid, view);
-    let b = bounds(view);
-    view.doc.insert_rows(b.start.row, b.row_count())
+    let rows = selected_rows(view);
+    let Some(&first) = rows.first() else { return false };
+    view.doc.insert_rows(first, rows.len())
 }
 
+/// Inserts as many blank rows as are selected, below the bottommost selected row.
 pub fn insert_rows_below(grid: &mut GridState, view: &mut DocView) -> bool {
     grid::commit_edit(grid, view);
-    let b = bounds(view);
-    view.doc.insert_rows(b.end.row + 1, b.row_count())
+    let rows = selected_rows(view);
+    let Some(&last) = rows.last() else { return false };
+    view.doc.insert_rows(last + 1, rows.len())
 }
 
+/// Deletes exactly the selected rows.
 pub fn delete_rows(grid: &mut GridState, view: &mut DocView) -> bool {
     grid::cancel_edit(grid);
-    let b = bounds(view);
-    let did = view.doc.delete_rows(b.start.row, b.row_count());
+    let rows = existing_rows(view);
+    let did = view.doc.delete_row_set(&rows);
     view.clamp_selection();
     did
 }
 
+/// Inserts a copy of each selected row right after it (after each run of them).
 pub fn duplicate_rows(grid: &mut GridState, view: &mut DocView) -> bool {
     grid::commit_edit(grid, view);
-    let b = bounds(view);
-    view.doc.duplicate_rows(b.start.row, b.row_count())
+    let rows = existing_rows(view);
+    view.doc.duplicate_row_set(&rows)
 }
 
-/// Moves the selected rows one step up (`delta` < 0) or down, taking the selection along.
+/// Moves the selected rows one step up (`delta` < 0) or down, taking the selection along. Only
+/// a contiguous block of existing rows moves.
 pub fn move_rows(grid: &mut GridState, view: &mut DocView, delta: i64) -> bool {
     grid::commit_edit(grid, view);
-    let b = bounds(view);
-    let (from, count) = (b.start.row, b.row_count());
-    let rows = view.doc.table.row_count();
-    if from + count > rows {
+    let rows = selected_rows(view);
+    let total = view.doc.table.row_count();
+    let (Some(&from), Some(&last)) = (rows.first(), rows.last()) else { return false };
+    if !contiguous(&rows) || last >= total {
         return false;
     }
+    let count = rows.len();
     let to = if delta < 0 {
-        if from <= view.body_start() {
+        if from <= view.data_start() {
             return false;
         }
         from - 1
     } else {
-        if from + count >= rows {
+        if from + count >= total {
             return false;
         }
         from + count + 1
@@ -167,34 +255,42 @@ pub fn move_rows(grid: &mut GridState, view: &mut DocView, delta: i64) -> bool {
     }
 }
 
+// ----- Columns -------------------------------------------------------------------------------
+
 pub fn insert_cols_left(grid: &mut GridState, view: &mut DocView) -> bool {
     grid::commit_edit(grid, view);
-    let b = bounds(view);
-    view.doc.insert_cols(b.start.col, b.col_count())
+    let cols = selected_cols(view);
+    let Some(&first) = cols.first() else { return false };
+    view.doc.insert_cols(first, cols.len())
 }
 
 pub fn insert_cols_right(grid: &mut GridState, view: &mut DocView) -> bool {
     grid::commit_edit(grid, view);
-    let b = bounds(view);
-    view.doc.insert_cols(b.end.col + 1, b.col_count())
+    let cols = selected_cols(view);
+    let Some(&last) = cols.last() else { return false };
+    view.doc.insert_cols(last + 1, cols.len())
 }
 
+/// Deletes exactly the selected columns.
 pub fn delete_cols(grid: &mut GridState, view: &mut DocView) -> bool {
     grid::cancel_edit(grid);
-    let b = bounds(view);
-    let did = view.doc.delete_cols(b.start.col, b.col_count());
+    let cols = existing_cols(view);
+    let did = view.doc.delete_col_set(&cols);
     view.clamp_selection();
     did
 }
 
+/// Moves the selected columns one step left or right. Only a contiguous block of existing
+/// columns moves.
 pub fn move_cols(grid: &mut GridState, view: &mut DocView, delta: i64) -> bool {
     grid::commit_edit(grid, view);
-    let b = bounds(view);
-    let (from, count) = (b.start.col, b.col_count());
+    let cols = selected_cols(view);
     let width = view.doc.table.width();
-    if from + count > width {
+    let (Some(&from), Some(&last)) = (cols.first(), cols.last()) else { return false };
+    if !contiguous(&cols) || last >= width {
         return false;
     }
+    let count = cols.len();
     let to = if delta < 0 {
         if from == 0 {
             return false;
@@ -214,10 +310,14 @@ pub fn move_cols(grid: &mut GridState, view: &mut DocView, delta: i64) -> bool {
     }
 }
 
-pub fn autofit_selected(grid: &mut GridState, view: &mut DocView, ui: &Ui) {
-    for c in bounds(view).cols() {
-        grid::autofit(grid, view, ui, c);
-    }
+pub fn autofit_selected_cols(grid: &mut GridState, view: &mut DocView, ui: &Ui) {
+    let cols = selected_cols(view);
+    grid::autofit_cols(grid, view, ui, &cols);
+}
+
+pub fn autofit_selected_rows(grid: &mut GridState, view: &mut DocView) {
+    let rows = selected_rows(view);
+    grid::autofit_rows(grid, view, &rows);
 }
 
 fn item(ui: &mut Ui, enabled: bool, label: impl Into<egui::WidgetText>, shortcut: &str) -> bool {
@@ -267,10 +367,10 @@ pub fn edit_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
     }
 }
 
-/// The whole body of the table (header row excluded).
+/// The data rows of the table (the header row excluded when there is one).
 pub fn whole_body(view: &DocView) -> Range {
     let table = &view.doc.table;
-    let start = view.body_start();
+    let start = view.data_start();
     Range::new(CellRef::new(start, 0), CellRef::new(table.row_count().saturating_sub(1).max(start), table.width().saturating_sub(1)))
 }
 
@@ -299,7 +399,7 @@ pub fn change_case(grid: &mut GridState, view: &mut DocView, case: Case) -> usiz
 
 pub fn remove_empty_rows(grid: &mut GridState, view: &mut DocView) -> usize {
     grid::cancel_edit(grid);
-    let n = view.doc.remove_empty_rows(view.body_start());
+    let n = view.doc.remove_empty_rows(view.data_start());
     view.clamp_selection();
     note(grid, n, "empty rows", "removed");
     n
@@ -315,78 +415,111 @@ pub fn remove_empty_cols(grid: &mut GridState, view: &mut DocView) -> usize {
 
 pub fn remove_duplicate_rows(grid: &mut GridState, view: &mut DocView) -> usize {
     grid::cancel_edit(grid);
-    let n = view.doc.remove_duplicate_rows(view.body_start());
+    let n = view.doc.remove_duplicate_rows(view.data_start());
     view.clamp_selection();
     note(grid, n, "duplicate rows", "removed");
     n
 }
 
 pub fn rows_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
-    let n = bounds(view).row_count();
+    ui.set_min_width(240.0);
+    if whole_columns_selected(view) {
+        ui.label(egui::RichText::new("Whole columns are selected: select cells or rows first.").weak());
+        return;
+    }
+    let rows = selected_rows(view);
+    let existing = existing_rows(view);
+    let n = rows.len();
     let s = if n == 1 { "row" } else { "rows" };
-    if item(ui, true, format!("Insert {n} {s} above"), "") {
+    let which = describe_rows(&rows);
+    let which_existing = describe_rows(&existing);
+    ui.label(egui::RichText::new(format!("Selected: {which}")).weak());
+    if item(ui, !rows.is_empty(), format!("Insert {n} blank {s} above"), "") {
         insert_rows_above(grid, view);
         ui.close();
     }
-    if item(ui, true, format!("Insert {n} {s} below"), "") {
+    if item(ui, !rows.is_empty(), format!("Insert {n} blank {s} below"), "") {
         insert_rows_below(grid, view);
         ui.close();
     }
-    if item(ui, true, format!("Delete {s}"), "") {
+    if item(ui, !existing.is_empty(), format!("Delete {which_existing}"), "") {
         delete_rows(grid, view);
         ui.close();
     }
-    if item(ui, true, format!("Duplicate {s}"), "") {
+    if item(ui, !existing.is_empty(), format!("Duplicate {which_existing}"), "") {
         duplicate_rows(grid, view);
         ui.close();
     }
     ui.separator();
-    if item(ui, true, "Move up", "Alt+Up") {
+    let movable = contiguous(&rows) && rows.last().is_some_and(|&l| l < view.doc.table.row_count());
+    if item(ui, movable, format!("Move {which} up"), "Alt+Up") {
         move_rows(grid, view, -1);
     }
-    if item(ui, true, "Move down", "Alt+Down") {
+    if item(ui, movable, format!("Move {which} down"), "Alt+Down") {
         move_rows(grid, view, 1);
+    }
+    if !movable && !rows.is_empty() {
+        ui.label(egui::RichText::new("Only a contiguous block of rows can move.").weak());
+    }
+    ui.separator();
+    if item(ui, !existing.is_empty(), "Fit height to contents", "") {
+        autofit_selected_rows(grid, view);
+        ui.close();
+    }
+    if item(ui, rows.iter().any(|r| view.row_heights.contains_key(r)), "Reset height", "") {
+        grid::reset_row_heights(view, &rows);
+        ui.close();
     }
 }
 
 pub fn cols_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
-    let n = bounds(view).col_count();
+    ui.set_min_width(240.0);
+    if whole_rows_selected(view) {
+        ui.label(egui::RichText::new("Whole rows are selected: select cells or columns first.").weak());
+        return;
+    }
+    let cols = selected_cols(view);
+    let existing = existing_cols(view);
+    let n = cols.len();
     let s = if n == 1 { "column" } else { "columns" };
-    if item(ui, true, format!("Insert {n} {s} left"), "") {
+    let which = describe_cols(&cols);
+    let which_existing = describe_cols(&existing);
+    ui.label(egui::RichText::new(format!("Selected: {which}")).weak());
+    if item(ui, !cols.is_empty(), format!("Insert {n} blank {s} left"), "") {
         insert_cols_left(grid, view);
         ui.close();
     }
-    if item(ui, true, format!("Insert {n} {s} right"), "") {
+    if item(ui, !cols.is_empty(), format!("Insert {n} blank {s} right"), "") {
         insert_cols_right(grid, view);
         ui.close();
     }
-    if item(ui, true, format!("Delete {s}"), "") {
+    if item(ui, !existing.is_empty(), format!("Delete {which_existing}"), "") {
         delete_cols(grid, view);
         ui.close();
     }
     ui.separator();
-    if item(ui, true, "Move left", "Alt+Left") {
+    let movable = contiguous(&cols) && cols.last().is_some_and(|&l| l < view.doc.table.width());
+    if item(ui, movable, format!("Move {which} left"), "Alt+Left") {
         move_cols(grid, view, -1);
     }
-    if item(ui, true, "Move right", "Alt+Right") {
+    if item(ui, movable, format!("Move {which} right"), "Alt+Right") {
         move_cols(grid, view, 1);
     }
-    ui.separator();
-    if item(ui, view.doc.dialect.header, "Rename header…", "") {
-        grid.rename_request = Some(bounds(view).start.col);
-        ui.close();
+    if !movable && !cols.is_empty() {
+        ui.label(egui::RichText::new("Only a contiguous block of columns can move.").weak());
     }
-    if item(ui, true, "Fit width to contents", "") {
-        autofit_selected(grid, view, ui);
+    ui.separator();
+    if item(ui, !cols.is_empty(), "Fit width to contents", "") {
+        autofit_selected_cols(grid, view, ui);
         ui.close();
     }
 }
 
-/// Sorts the body rows by the active cell's column.
+/// Sorts the data rows by the active cell's column.
 pub fn sort(grid: &mut GridState, view: &mut DocView, ascending: bool, kind: SortKind) -> bool {
     grid::commit_edit(grid, view);
     let spec = SortSpec { col: view.sel.active.col, ascending, kind };
-    let did = view.doc.sort(view.body_start(), spec);
+    let did = view.doc.sort(view.data_start(), spec);
     grid.scroll_to_active = true;
     did
 }
@@ -458,7 +591,6 @@ pub fn data_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
 
 /// The column header's right-click menu: column structure, then sort and filter.
 pub fn header_context_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
-    ui.set_min_width(220.0);
     cols_menu(grid, view, ui);
     ui.separator();
     data_menu(grid, view, ui);
@@ -487,6 +619,42 @@ mod tests {
         String::from_utf8(v.doc.to_bytes().0).unwrap()
     }
 
+    fn select(v: &mut DocView, ranges: &[(usize, usize, usize, usize)]) {
+        let rs: Vec<Range> = ranges.iter().map(|&(r0, c0, r1, c1)| Range::new(CellRef::new(r0, c0), CellRef::new(r1, c1))).collect();
+        let active = rs.last().map(|r| r.start).unwrap_or_default();
+        v.sel = Selection { active, anchor: active, ranges: rs };
+    }
+
+    #[test]
+    fn descriptions_name_the_exact_rows() {
+        assert_eq!(describe_rows(&[4]), "row 5");
+        assert_eq!(describe_rows(&[1, 4, 5]), "rows 2, 5–6");
+        assert_eq!(describe_rows(&(0..12).step_by(2).collect::<Vec<_>>()), "6 rows");
+        assert_eq!(describe_rows(&[]), "no rows");
+        assert_eq!(describe_cols(&[0, 1, 2, 27]), "columns A–C, AB");
+    }
+
+    #[test]
+    fn disconnected_selections_touch_only_their_own_rows() {
+        let mut v = view("h\na\nb\nc\nd\ne\n");
+        let mut g = GridState::default();
+        // Rows 2 and 5 (b, e) selected as two cells with a gap.
+        select(&mut v, &[(2, 0, 2, 0), (5, 0, 5, 0)]);
+        assert_eq!(selected_rows(&v), vec![2, 5]);
+        assert!(delete_rows(&mut g, &mut v));
+        assert_eq!(text(&v), "h\na\nc\nd\n", "the rows in between stay");
+        assert!(undo(&mut g, &mut v));
+        select(&mut v, &[(2, 0, 2, 0), (5, 0, 5, 0)]);
+        assert!(duplicate_rows(&mut g, &mut v));
+        assert_eq!(text(&v), "h\na\nb\nb\nc\nd\ne\ne\n", "each selected row is copied in place");
+        assert!(undo(&mut g, &mut v));
+        select(&mut v, &[(2, 0, 2, 0), (5, 0, 5, 0)]);
+        assert!(!move_rows(&mut g, &mut v, 1), "a gap means no move");
+        assert!(insert_rows_above(&mut g, &mut v));
+        assert_eq!(v.doc.table.row_count(), 8, "two selected rows: two blank rows above the first");
+        assert_eq!(text(&v), "h\na\n\n\nb\nc\nd\ne\n");
+    }
+
     #[test]
     fn row_moves_carry_the_selection_and_stop_at_the_edges() {
         let mut v = view("h\na\nb\nc\n");
@@ -504,23 +672,25 @@ mod tests {
     }
 
     #[test]
-    fn column_moves_and_structure_edits_follow_the_selection() {
-        let mut v = view("a,b,c\n1,2,3\n");
+    fn column_operations_follow_the_selected_columns() {
+        let mut v = view("a,b,c,d\n1,2,3,4\n");
         let mut g = GridState::default();
+        select(&mut v, &[(0, 0, 0, 0), (1, 3, 1, 3)]);
+        assert_eq!(selected_cols(&v), vec![0, 3]);
+        assert!(delete_cols(&mut g, &mut v));
+        assert_eq!(text(&v), "b,c\n2,3\n", "only the selected columns go");
+        assert!(undo(&mut g, &mut v));
         v.sel = Selection::at(CellRef::new(1, 0));
         assert!(move_cols(&mut g, &mut v, 1));
-        assert_eq!(text(&v), "b,a,c\n2,1,3\n");
+        assert_eq!(text(&v), "b,a,c,d\n2,1,3,4\n");
         assert_eq!(v.sel.active, CellRef::new(1, 1));
         assert!(insert_cols_right(&mut g, &mut v));
-        assert_eq!(text(&v), "b,a,,c\n2,1,,3\n");
-        assert!(delete_cols(&mut g, &mut v), "deletes the selected column (the moved one)");
-        assert_eq!(text(&v), "b,,c\n2,,3\n");
-        assert!(insert_rows_below(&mut g, &mut v) && duplicate_rows(&mut g, &mut v));
-        assert_eq!(v.doc.table.row_count(), 4);
-        assert!(delete_rows(&mut g, &mut v));
-        v.sel = Selection::range(Range::new(CellRef::new(1, 0), CellRef::new(1, 2)));
-        assert!(clear(&mut g, &mut v));
-        assert_eq!(text(&v), "b,,c\n,,\n,,\n");
-        assert!(undo(&mut g, &mut v) && redo(&mut g, &mut v));
+        assert_eq!(text(&v), "b,a,,c,d\n2,1,,3,4\n");
+        // Whole-column and whole-row selections disable the other axis' operations.
+        let max = v.max_cell();
+        select(&mut v, &[(0, 1, max.row, 1)]);
+        assert!(whole_columns_selected(&v) && !whole_rows_selected(&v));
+        select(&mut v, &[(1, 0, 1, max.col)]);
+        assert!(whole_rows_selected(&v) && !whole_columns_selected(&v));
     }
 }

@@ -49,8 +49,6 @@ pub struct EditorApp {
     /// A message box: title and text.
     pub message: Option<(String, String)>,
     prompt: Option<Prompt>,
-    /// The header rename dialog: column and the text being edited.
-    rename: Option<(usize, String)>,
     /// Set once the user has answered every "save changes?" question before quitting.
     quit_confirmed: bool,
     pub find: find::FindBar,
@@ -87,7 +85,6 @@ impl EditorApp {
             services,
             message: None,
             prompt: None,
-            rename: None,
             quit_confirmed: false,
             find: find::FindBar::default(),
             filter_dialog: None,
@@ -236,11 +233,6 @@ impl EditorApp {
             theme::apply(ctx, dark);
             self.theme_applied = Some(dark);
         }
-        if let Some(col) = self.grid.rename_request.take()
-            && let Some(view) = self.active_view()
-        {
-            self.rename = Some((col, view.header_name(col).to_string()));
-        }
         if let Some(col) = self.grid.filter_request.take()
             && let Some(view) = self.active_view()
         {
@@ -265,7 +257,6 @@ impl EditorApp {
         }
         let dialog_open = self.message.is_some()
             || self.prompt.is_some()
-            || self.rename.is_some()
             || self.filter_dialog.is_some()
             || self.dialect_dialog.is_some()
             || self.goto.is_some()
@@ -374,7 +365,6 @@ impl EditorApp {
         egui::CentralPanel::default().frame(egui::Frame::new().fill(t.grid_bg)).show(ui, |ui| grid::show(self, ui, &t));
         self.message_box(ui.ctx());
         self.save_prompt(ui.ctx());
-        self.rename_dialog(ui.ctx());
         self.filter_dialog(ui.ctx());
         self.dialect_dialog(ui.ctx());
         self.goto_dialog(ui.ctx());
@@ -456,8 +446,15 @@ impl EditorApp {
                 ui.separator();
                 if let Some(view) = self.docs.get_mut(self.active) {
                     let mut header = view.doc.dialect.header;
-                    if ui.checkbox(&mut header, "First row is header").changed() {
+                    if ui
+                        .checkbox(&mut header, "First row is header")
+                        .on_hover_text("Sort, filters and cleanup leave row 1 alone; menus name columns by it")
+                        .changed()
+                    {
                         view.set_header(header);
+                        ui.close();
+                    }
+                    if ui.checkbox(&mut view.freeze_top, "Freeze top row").changed() {
                         ui.close();
                     }
                 }
@@ -523,7 +520,7 @@ impl EditorApp {
         let zoom = self.grid.zoom;
         let Some(view) = self.active_view() else { return };
         let table = &view.doc.table;
-        let data_rows = table.row_count().saturating_sub(view.body_start());
+        let data_rows = table.row_count().saturating_sub(view.data_start());
         let sel = &view.sel;
         let bounds = sel.bounds();
         ui.horizontal(|ui| {
@@ -647,47 +644,6 @@ impl EditorApp {
                     }
                 }
             }
-        }
-    }
-
-    fn rename_dialog(&mut self, ctx: &egui::Context) {
-        let Some((col, mut text)) = self.rename.take() else { return };
-        let mut done = None;
-        let response = egui::Modal::new(Id::unique("rename-header")).show(ctx, |ui| {
-            ui.set_width(320.0);
-            ui.heading(format!("Rename column {}", csv_editor_table::column_label(col)));
-            ui.add_space(6.0);
-            let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY));
-            if !ui.memory(|m| m.has_focus(edit.id)) && done.is_none() {
-                edit.request_focus();
-            }
-            if edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                done = Some(true);
-            }
-            if ui.input(|i| i.key_pressed(Key::Escape)) {
-                done = Some(false);
-            }
-            ui.add_space(10.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Cancel").clicked() {
-                    done = Some(false);
-                }
-                if ui.button("Rename").clicked() {
-                    done = Some(true);
-                }
-            });
-        });
-        if response.should_close() {
-            done = Some(false);
-        }
-        match done {
-            Some(true) => {
-                if let Some(view) = self.active_view_mut() {
-                    view.doc.set_cell(0, col, text.as_str());
-                }
-            }
-            Some(false) => {}
-            None => self.rename = Some((col, text)),
         }
     }
 
@@ -993,6 +949,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Alt+Left / Alt+Right", "Move the selected columns"),
     ("", "View"),
     ("Ctrl+Wheel, Ctrl++ / Ctrl+- / Ctrl+0", "Zoom in / out / reset"),
-    ("Double-click a column edge", "Fit the column to its contents"),
+    ("Double-click a column or row edge", "Fit the selected columns or rows to their contents"),
+    ("Drag a column or row edge", "Resize"),
     ("Right-click", "Context menu for cells, rows (gutter) or columns (header)"),
 ];

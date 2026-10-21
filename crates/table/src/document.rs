@@ -175,6 +175,50 @@ impl Document {
         self.apply("Move rows", Edit::MoveRows { from, count, to })
     }
 
+    /// Deletes exactly these rows (any order, duplicates ignored, rows past the table ignored).
+    pub fn delete_row_set(&mut self, rows: &[usize]) -> bool {
+        let n = self.table.row_count();
+        let rows: Vec<usize> = rows.iter().copied().filter(|&r| r < n).collect();
+        if rows.is_empty() {
+            return false;
+        }
+        self.apply("Delete rows", Edit::Batch(crate::cleanup::delete_rows_edits(rows)))
+    }
+
+    /// Inserts a copy of each run of these rows right after it.
+    pub fn duplicate_row_set(&mut self, rows: &[usize]) -> bool {
+        let n = self.table.row_count();
+        let mut rows: Vec<usize> = rows.iter().copied().filter(|&r| r < n).collect();
+        rows.sort_unstable();
+        rows.dedup();
+        if rows.is_empty() {
+            return false;
+        }
+        // Later runs first, so earlier insertions do not shift them.
+        let edits: Vec<Edit> = crate::cleanup::runs(&rows)
+            .into_iter()
+            .rev()
+            .map(|(at, count)| Edit::InsertRows {
+                at: at + count,
+                rows: self.table.rows().get(at..at + count).map(<[Row]>::to_vec).unwrap_or_default(),
+            })
+            .collect();
+        self.apply("Duplicate rows", Edit::Batch(edits))
+    }
+
+    /// Deletes exactly these columns.
+    pub fn delete_col_set(&mut self, cols: &[usize]) -> bool {
+        let w = self.table.width();
+        let mut cols: Vec<usize> = cols.iter().copied().filter(|&c| c < w).collect();
+        cols.sort_unstable();
+        cols.dedup();
+        if cols.is_empty() {
+            return false;
+        }
+        let edits: Vec<Edit> = crate::cleanup::runs(&cols).into_iter().rev().map(|(at, count)| Edit::DeleteCols { at, count }).collect();
+        self.apply("Delete columns", Edit::Batch(edits))
+    }
+
     /// Inserts `count` empty columns before `at` (at the end when `at` is past the width).
     pub fn insert_cols(&mut self, at: usize, count: usize) -> bool {
         let at = at.min(self.table.width());
@@ -372,6 +416,23 @@ mod tests {
         d.undo();
         assert_eq!(text(&d), "a,b,c\n1,2,3\n");
         assert!(d.paste(Range::cell(CellRef::new(0, 0)), &[], None).is_none());
+    }
+
+    #[test]
+    fn row_and_column_sets() {
+        let mut d = doc("h\na\nb\nc\nd\n");
+        assert!(d.delete_row_set(&[4, 2, 2, 99]));
+        assert_eq!(text(&d), "h\na\nc\n");
+        d.undo();
+        assert!(d.duplicate_row_set(&[1, 2, 4]));
+        assert_eq!(text(&d), "h\na\nb\na\nb\nc\nd\nd\n", "runs are copied as blocks, after themselves");
+        d.undo();
+        assert!(!d.delete_row_set(&[50]));
+        let mut d = doc("a,b,c,d\n1,2,3,4\n");
+        assert!(d.delete_col_set(&[3, 0]));
+        assert_eq!(text(&d), "b,c\n2,3\n");
+        d.undo();
+        assert_eq!(text(&d), "a,b,c,d\n1,2,3,4\n");
     }
 
     #[test]

@@ -1,8 +1,13 @@
-//! Per-document interface state: selection, scroll position, column widths, row filters.
+//! Per-document interface state: selection, scroll position, column widths, row heights, row
+//! filters, the frozen top row.
+//!
+//! Every table row is in the grid, as in a spreadsheet: row 1 is row 1. "First row is header"
+//! only tells sort, filters and the cleanup tools to leave row 1 alone, and lets menus name
+//! columns by it. Freezing the top row is a separate view setting.
 //!
 //! Row filters are a view: hidden rows stay in the table (edits, saves and sorts see them), the
-//! grid just does not show them. The grid scrolls through *display rows*: the visible body rows
-//! in order, followed by blank rows past the table.
+//! grid just does not show them. The grid scrolls through *display rows*: the visible rows in
+//! order, followed by blank rows past the table.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -56,7 +61,7 @@ impl Filter {
             FilterKind::NotBlank => !cell.trim().is_empty(),
             FilterKind::Contains => cell.to_lowercase().contains(&self.text.to_lowercase()),
             FilterKind::NotContains => !cell.to_lowercase().contains(&self.text.to_lowercase()),
-            FilterKind::Equals => cell.trim().eq_ignore_ascii_case(self.text.trim()) || cell.trim().to_lowercase() == self.text.trim().to_lowercase(),
+            FilterKind::Equals => cell.trim().to_lowercase() == self.text.trim().to_lowercase(),
         }
     }
 
@@ -68,14 +73,19 @@ impl Filter {
 pub struct DocView {
     pub doc: Document,
     pub sel: Selection,
-    /// The display row shown at the top of the body (0 = the first visible body row).
+    /// The display row shown at the top of the scrolling body (0 = the first row).
     pub scroll: usize,
     /// The column shown at the left of the body.
     pub scroll_col: usize,
     /// Column widths in unzoomed points, where the user or autofit set one.
     pub col_widths: HashMap<usize, f32>,
+    /// Row heights in unzoomed points, where the user or autofit set one.
+    pub row_heights: HashMap<usize, f32>,
+    /// Keep the first row on screen while scrolling.
+    pub freeze_top: bool,
     pub filters: Vec<Filter>,
-    /// Body rows that pass the filters, in order; `None` without filters.
+    /// Rows that pass the filters, in order (the header row always included); `None` without
+    /// filters.
     visible: Option<Rc<Vec<usize>>>,
     /// What `visible` was computed for: the document version and the filter generation.
     visible_key: (u64, u64),
@@ -84,13 +94,14 @@ pub struct DocView {
 
 impl DocView {
     pub fn new(doc: Document) -> DocView {
-        let first = usize::from(doc.dialect.header);
         DocView {
             doc,
-            sel: Selection::at(CellRef::new(first, 0)),
+            sel: Selection::default(),
             scroll: 0,
             scroll_col: 0,
             col_widths: HashMap::new(),
+            row_heights: HashMap::new(),
+            freeze_top: false,
             filters: Vec::new(),
             visible: None,
             visible_key: (0, 0),
@@ -98,15 +109,20 @@ impl DocView {
         }
     }
 
-    /// The first table row shown in the body: 1 when the first row names the columns and is
-    /// shown in the column header strip instead.
+    /// The first table row the grid shows: always 0, every row is in the grid.
     pub fn body_start(&self) -> usize {
+        0
+    }
+
+    /// The first data row: 1 when the first row is the header (sort, filters and cleanup leave
+    /// it alone), else 0.
+    pub fn data_start(&self) -> usize {
         usize::from(self.doc.dialect.header)
     }
 
     /// Rows the grid lets you scroll to and select, blank ones past the data included.
     pub fn extent_rows(&self) -> usize {
-        self.doc.table.row_count().max(self.body_start()).saturating_add(EXTRA_ROWS)
+        self.doc.table.row_count().saturating_add(EXTRA_ROWS)
     }
 
     pub fn extent_cols(&self) -> usize {
@@ -130,21 +146,16 @@ impl DocView {
         if name.is_empty() { letter } else { format!("{letter} ({name})") }
     }
 
-    /// Turns the "first row is header" setting on or off and keeps the selection inside the body.
+    /// Turns the "first row is header" setting on or off.
     pub fn set_header(&mut self, header: bool) {
         self.doc.dialect.header = header;
         self.filter_gen = self.filter_gen.wrapping_add(1);
-        let start = self.body_start();
-        if self.sel.active.row < start || self.sel.anchor.row < start || self.sel.ranges.iter().any(|r| r.start.row < start) {
-            self.sel = Selection::at(CellRef::new(start.max(self.sel.active.row), self.sel.active.col));
-        }
     }
 
     /// Keeps the selection inside the grid after the table shrank (undo, deletions).
     pub fn clamp_selection(&mut self) {
         let max = self.max_cell();
-        let start = self.body_start();
-        let clamp = |c: CellRef| CellRef::new(c.row.clamp(start, max.row), c.col.min(max.col));
+        let clamp = |c: CellRef| CellRef::new(c.row.min(max.row), c.col.min(max.col));
         self.sel.active = clamp(self.sel.active);
         self.sel.anchor = clamp(self.sel.anchor);
         for r in &mut self.sel.ranges {
@@ -192,22 +203,27 @@ impl DocView {
             return;
         }
         let table = &self.doc.table;
-        let rows = (self.body_start()..table.row_count()).filter(|&r| self.filters.iter().all(|f| f.passes(table.get(r, f.col)))).collect();
+        let start = self.data_start().min(table.row_count());
+        let mut rows: Vec<usize> = (0..start).collect();
+        rows.extend((start..table.row_count()).filter(|&r| self.filters.iter().all(|f| f.passes(table.get(r, f.col)))));
         self.visible = Some(Rc::new(rows));
         self.visible_key = key;
     }
 
-    /// Data rows the grid shows (all body rows without a filter).
+    /// Data rows the grid shows (the header row not counted).
     pub fn visible_count(&self) -> usize {
         match &self.visible {
-            Some(v) => v.len(),
-            None => self.doc.table.row_count().saturating_sub(self.body_start()),
+            Some(v) => v.len().saturating_sub(self.data_start()),
+            None => self.doc.table.row_count().saturating_sub(self.data_start()),
         }
     }
 
-    /// Display rows: the visible body rows, then the blank rows past the table.
+    /// Display rows: the visible rows, then the blank rows past the table.
     pub fn display_count(&self) -> usize {
-        self.visible_count().saturating_add(EXTRA_ROWS)
+        match &self.visible {
+            Some(v) => v.len().saturating_add(EXTRA_ROWS),
+            None => self.extent_rows(),
+        }
     }
 
     /// The table row shown at display row `i`; past the visible rows, the blank rows after the
@@ -216,9 +232,9 @@ impl DocView {
         match &self.visible {
             Some(v) => match v.get(i) {
                 Some(&r) => r,
-                None => self.doc.table.row_count().max(self.body_start()).saturating_add(i - v.len()),
+                None => self.doc.table.row_count().saturating_add(i - v.len()),
             },
-            None => self.body_start().saturating_add(i),
+            None => i,
         }
     }
 
@@ -226,7 +242,7 @@ impl DocView {
     pub fn display_of_row(&self, r: usize) -> usize {
         match &self.visible {
             Some(v) => {
-                let rows = self.doc.table.row_count().max(self.body_start());
+                let rows = self.doc.table.row_count();
                 if r >= rows {
                     return v.len().saturating_add(r - rows);
                 }
@@ -235,7 +251,7 @@ impl DocView {
                     Err(i) => i.min(v.len()),
                 }
             }
-            None => r.saturating_sub(self.body_start()),
+            None => r,
         }
     }
 
@@ -243,20 +259,19 @@ impl DocView {
     /// mutably (replace all).
     pub fn visibility(&self) -> Box<dyn Fn(usize) -> bool> {
         let rows = self.doc.table.row_count();
-        let start = self.body_start();
         match &self.visible {
             Some(v) => {
                 let v = Rc::clone(v);
                 Box::new(move |r| r >= rows || v.binary_search(&r).is_ok())
             }
-            None => Box::new(move |r| r >= start),
+            None => Box::new(|_| true),
         }
     }
 
     pub fn is_row_visible(&self, r: usize) -> bool {
         match &self.visible {
             Some(v) => r >= self.doc.table.row_count() || v.binary_search(&r).is_ok(),
-            None => r >= self.body_start(),
+            None => true,
         }
     }
 
@@ -294,20 +309,21 @@ mod tests {
     }
 
     #[test]
-    fn display_rows_skip_hidden_rows_and_continue_past_the_table() {
+    fn display_rows_keep_the_header_skip_hidden_rows_and_continue_past_the_table() {
         let mut v = view("city\nOslo\nBerlin\nOslo\nLisbon\n");
-        assert_eq!(v.display_count(), 4 + EXTRA_ROWS);
-        assert_eq!(v.row_at_display(0), 1);
-        assert_eq!(v.display_of_row(3), 2);
+        assert_eq!(v.data_start(), 1);
+        assert_eq!(v.display_count(), 5 + EXTRA_ROWS);
+        assert_eq!(v.row_at_display(0), 0, "row 1 is in the grid");
+        assert_eq!(v.display_of_row(3), 3);
         v.set_filter(Filter { col: 0, kind: FilterKind::Contains, text: "os".to_string() });
         v.refresh_visible();
         assert!(v.filtered());
-        assert_eq!(v.visible_count(), 2, "Oslo twice");
-        assert_eq!((v.row_at_display(0), v.row_at_display(1)), (1, 3));
-        assert_eq!(v.row_at_display(2), 5, "then the blank rows after the table");
-        assert_eq!(v.display_of_row(3), 1);
-        assert_eq!(v.display_of_row(2), 1, "a hidden row maps to the next visible one");
-        assert_eq!(v.display_of_row(6), 3);
+        assert_eq!(v.visible_count(), 2, "Oslo twice; the header row is not counted");
+        assert_eq!((v.row_at_display(0), v.row_at_display(1), v.row_at_display(2)), (0, 1, 3));
+        assert_eq!(v.row_at_display(3), 5, "then the blank rows after the table");
+        assert_eq!(v.display_of_row(3), 2);
+        assert_eq!(v.display_of_row(2), 2, "a hidden row maps to the next visible one");
+        assert!(v.is_row_visible(0), "the header row is never filtered out");
         assert!(!v.is_row_visible(2) && v.is_row_visible(3) && v.is_row_visible(9));
         assert_eq!(v.snap_visible(2), 3);
         assert_eq!(v.snap_visible(4), 5, "after the last visible row comes the first blank one");
@@ -315,10 +331,14 @@ mod tests {
         v.doc.set_cell(2, 0, "Oslo");
         v.refresh_visible();
         assert_eq!(v.visible_count(), 3);
+        // Without a header flag, row 1 is data and can be hidden too.
+        v.set_header(false);
+        v.refresh_visible();
+        assert!(!v.is_row_visible(0));
         v.clear_filters();
         v.refresh_visible();
         assert!(!v.filtered());
-        assert_eq!(v.row_at_display(1), 2);
+        assert_eq!(v.row_at_display(1), 1);
     }
 
     #[test]

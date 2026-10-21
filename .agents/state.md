@@ -25,8 +25,12 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master` (no rem
   recent files, system font fallbacks, zone-aware context menus, Help (shortcuts, About).
   Verification entry point (see `.agents/repo-guidance.md`) passes; 100 MB soak numbers are in
   the plan.
-  Next action: the owner tries the app (`cargo run --release -p csv-editor -- <file.csv>`) and
-  reports what to change; follow-ups are listed at the end of the plan.
+  Owner review round 1 (2026-10-21) landed: Excel-like rows (row 1 in the grid, letters-only
+  header strip, optional frozen top row), autofit over the selection for columns and rows with
+  adjustable row heights, and row/column operations defined on exactly the selected rows and
+  columns with descriptive menu labels (see the plan's review section).
+  Next action: the owner re-tests (`cargo run --release -p csv-editor -- <file.csv>`) and reports
+  the next round; follow-ups are listed at the end of the plan.
 
 ## Facts
 

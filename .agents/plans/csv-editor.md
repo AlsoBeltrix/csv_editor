@@ -139,6 +139,22 @@ UI behaviour that can be tested headlessly uses `egui_kittest` (as GridCraft doe
 - None. Direct-to-`master` slices and the verification entry point above were stated as
   assumptions in the approved proposal.
 
+## Owner review round 1 (2026-10-21)
+
+Findings from the owner's first hands-on session and how they were resolved:
+
+1. Double-clicking a column or row edge now fits every selected column or row (the edge's
+   own line when it is not selected). Rows gained adjustable heights: drag a gutter edge, or fit
+   to contents, and cells in tall rows show their lines.
+2. Row 1 is in the grid like any row (the header strip shows letters only, as in Excel), so a
+   column is renamed by typing into row 1. "First row is header" only tells sort, filters and
+   cleanup to leave row 1 alone and lets menus name columns by it; "Freeze top row" (View) pins
+   it. The rename dialog is gone.
+3. Row and column operations act on exactly the rows (columns) that contain a selected cell,
+   never on the gap between disconnected selections. Delete and duplicate name their targets
+   ("Delete rows 2, 5–6"); moves need a contiguous block; row operations are disabled when
+   whole columns are selected and vice versa.
+
 ## Follow-ups (not started)
 
 - Memory: parsing decodes the whole file into a `String` before splitting it; a UTF-8 file could
