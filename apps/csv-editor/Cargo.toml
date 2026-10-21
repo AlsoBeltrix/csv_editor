@@ -22,6 +22,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = { workspace = true }
+# Reading the system clipboard for the menu's Paste (Ctrl+V arrives through egui itself).
+arboard = { version = "3.7", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Blocks on the start-up DirectX 12 adapter probe (`graphics.rs`); already in the tree via eframe.

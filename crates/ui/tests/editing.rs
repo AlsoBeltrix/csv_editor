@@ -117,6 +117,42 @@ fn typing_past_the_table_grows_it_and_alt_arrows_move_rows() {
 }
 
 #[test]
+fn copy_cut_and_paste_move_blocks_of_cells() {
+    let mut h = harness(app("a,b,c\r\n1,2,3\r\n4,5,6\r\n"));
+    press_with(&mut h, Modifiers::SHIFT, Key::ArrowRight);
+    h.input_mut().events.push(Event::Copy);
+    h.step();
+    let clip = h.state().grid.clip.clone().expect("Ctrl+C fills the clipboard");
+    assert_eq!(clip.text, "1\t2");
+    assert!(clip.cut.is_none());
+    // Paste one row down: the system clipboard text matches, so the cells are used as they are.
+    press(&mut h, Key::ArrowDown);
+    h.input_mut().events.push(Event::Paste("1\t2".to_string()));
+    h.step();
+    h.run();
+    assert_eq!((cell(&h, 2, 0), cell(&h, 2, 1)), ("1".to_string(), "2".to_string()));
+    assert_eq!(h.state().docs[0].sel.bounds(), csv_editor_table::Range::new(CellRef::new(2, 0), CellRef::new(2, 1)));
+    // Foreign text pastes as a block too, growing the table.
+    press(&mut h, Key::ArrowDown);
+    h.input_mut().events.push(Event::Paste("x\ty\r\np\tq\r\n".to_string()));
+    h.step();
+    h.run();
+    assert_eq!(h.state().docs[0].doc.table.row_count(), 5);
+    assert_eq!((cell(&h, 3, 0), cell(&h, 4, 1)), ("x".to_string(), "q".to_string()));
+    // Cut moves: the source is emptied when pasted.
+    h.input_mut().events.push(Event::Cut);
+    h.step();
+    press(&mut h, Key::ArrowRight);
+    press(&mut h, Key::ArrowRight);
+    let text = h.state().grid.clip.clone().unwrap().text;
+    h.input_mut().events.push(Event::Paste(text));
+    h.step();
+    h.run();
+    assert_eq!((cell(&h, 3, 0), cell(&h, 3, 1), cell(&h, 3, 2), cell(&h, 3, 3)), ("".to_string(), "".to_string(), "x".to_string(), "y".to_string()));
+    assert_eq!(h.state().docs[0].doc.history.undo_label(), Some("Move"));
+}
+
+#[test]
 fn a_new_document_starts_empty_and_saves_only_what_was_typed() {
     let mut h = harness(EditorApp::new(Services::default()));
     assert!(!h.state().docs[0].doc.dialect.header);

@@ -188,6 +188,19 @@ pub fn write(table: &Table, d: &Dialect) -> (Vec<u8>, usize) {
     encode(&out, d.encoding)
 }
 
+/// Clipboard text to cells: tab-separated, double-quote quoted, any line ending. Plain text
+/// without tabs or line breaks is a single cell.
+pub fn parse_block(text: &str) -> Vec<Row> {
+    let mut rows = Vec::new();
+    parse_records(text, b'\t', b'"', |r| rows.push(r));
+    rows
+}
+
+/// Cells to clipboard text: tab-separated, CRLF line ends, fields quoted when they need it.
+pub fn block_text(rows: &[Row]) -> String {
+    rows.iter().map(|r| write_row(r, '\t', '"')).collect::<Vec<_>>().join("\r\n")
+}
+
 /// A single row as text, for the clipboard. Fields are quoted only when they need it.
 pub fn write_row(row: &[Cell], delim: char, quote: char) -> String {
     let mut out = String::new();
@@ -317,6 +330,17 @@ mod tests {
         let (out, _) = write(&t, &d);
         assert_eq!(String::from_utf8(out).unwrap(), "\"plain\",\"a,b\",\"say \"\"hi\"\"\",\"two\nlines\"\n\"short\"");
         assert_eq!(write_row(&[Cell::from("a\tb"), Cell::from("c")], '\t', '"'), "\"a\tb\"\tc");
+    }
+
+    #[test]
+    fn clipboard_blocks_round_trip() {
+        let rows = vec![vec![Cell::from("a"), Cell::from("tab\there")], vec![Cell::from("line\nbreak"), Cell::from("q\"q")]];
+        let text = block_text(&rows);
+        assert_eq!(text, "a\t\"tab\there\"\r\n\"line\nbreak\"\t\"q\"\"q\"");
+        assert_eq!(parse_block(&text), rows);
+        assert_eq!(parse_block("plain"), vec![vec![Cell::from("plain")]]);
+        assert_eq!(parse_block("x\ty\n1\t2\n"), vec![vec![Cell::from("x"), Cell::from("y")], vec![Cell::from("1"), Cell::from("2")]]);
+        assert!(parse_block("").is_empty());
     }
 
     #[test]

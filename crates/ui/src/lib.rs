@@ -7,6 +7,7 @@ pub mod theme;
 pub mod view;
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use csv_editor_table::{Document, ParseOptions};
 use egui::{Id, Key, Modifiers, ViewportCommand};
@@ -19,6 +20,8 @@ pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Vec<PathBuf>>>,
     /// Save dialog, given the suggested file name.
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<PathBuf>>>,
+    /// The system clipboard's text, for the menu's Paste.
+    pub paste_text: Option<Rc<dyn Fn() -> Option<String>>>,
 }
 
 /// A "save changes?" question and what happens once it is answered.
@@ -53,11 +56,13 @@ pub struct EditorApp {
 
 impl EditorApp {
     pub fn new(services: Services) -> Self {
+        let mut grid = grid::GridState::default();
+        grid.paste_text = services.paste_text.clone();
         EditorApp {
             dark: false,
             system_theme: true,
             theme_applied: None,
-            grid: grid::GridState::default(),
+            grid,
             docs: vec![DocView::new(Document::new())],
             active: 0,
             services,

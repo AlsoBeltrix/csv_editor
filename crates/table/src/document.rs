@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::dialect::Dialect;
 use crate::edit::{Edit, History};
 use crate::io::{Error, ParseOptions, parse, write};
-use crate::selection::Range;
+use crate::selection::{CellRef, Range};
 use crate::table::{Cell, Row, Table};
 
 #[derive(Clone, Debug, Default)]
@@ -179,12 +179,54 @@ impl Document {
     pub fn move_cols(&mut self, from: usize, count: usize, to: usize) -> bool {
         self.apply("Move columns", Edit::MoveCols { from, count, to, trim: None })
     }
+
+    /// Pastes a block of cells. A single-cell `target` takes the block at its top-left corner;
+    /// a range whose size is a multiple of the block's is tiled with it; any other range takes
+    /// the block at its top-left corner. With `cut`, the source cells are emptied in the same
+    /// undo step. Rows are added as needed. Returns the range written.
+    pub fn paste(&mut self, target: Range, cells: &[Row], cut: Option<Range>) -> Option<Range> {
+        let height = cells.len();
+        let width = cells.iter().map(Vec::len).max().unwrap_or(0);
+        if height == 0 || width == 0 {
+            return None;
+        }
+        let tiles = |span: usize, size: usize| if target.is_single() || !span.is_multiple_of(size) { 1 } else { span / size };
+        let (down, across) = (tiles(target.row_count(), height), tiles(target.col_count(), width));
+        let mut block: Vec<Row> = Vec::with_capacity(height * down);
+        for _ in 0..down {
+            for row in cells {
+                let mut out = Vec::with_capacity(width * across);
+                for _ in 0..across {
+                    out.extend(row.iter().cloned());
+                    out.extend(std::iter::repeat_n(Cell::default(), width - row.len()));
+                }
+                block.push(out);
+            }
+        }
+        let at = target.start;
+        let end = CellRef::new(at.row + block.len() - 1, at.col + width * across - 1);
+        let mut edits = Vec::new();
+        if let Some(src) = cut {
+            for row in src.rows().filter(|r| *r < self.table.row_count()) {
+                let len = self.table.row(row).map_or(0, <[Cell]>::len);
+                if src.start.col < len {
+                    let count = src.end.col.min(len - 1) - src.start.col + 1;
+                    edits.push(Edit::set_rect(row, src.start.col, vec![vec![Cell::default(); count]]));
+                }
+            }
+        }
+        if let Some(grow) = self.grow_rows(end.row + 1) {
+            edits.push(grow);
+        }
+        edits.push(Edit::set_rect(at.row, at.col, block));
+        let label = if cut.is_some() { "Move" } else { "Paste" };
+        self.apply(label, Edit::Batch(edits)).then_some(Range::new(at, end))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::selection::CellRef;
 
     fn doc(text: &str) -> Document {
         Document::from_bytes(text.as_bytes(), &ParseOptions::default()).unwrap()
@@ -275,6 +317,35 @@ mod tests {
             d.undo();
         }
         assert_eq!(text(&d), "a,b\n1,2\n3,4\n");
+    }
+
+    #[test]
+    fn paste_places_tiles_grows_and_moves() {
+        let block = vec![vec![Cell::from("x"), Cell::from("y")], vec![Cell::from("1")]];
+        let mut d = doc("a,b,c\n1,2,3\n");
+        // Single-cell target: top-left placement, short rows padded within the block's width.
+        let r = d.paste(Range::cell(CellRef::new(1, 1)), &block, None).unwrap();
+        assert_eq!(r, Range::new(CellRef::new(1, 1), CellRef::new(2, 2)));
+        assert_eq!(text(&d), "a,b,c\n1,x,y\n,1,\n");
+        d.undo();
+        // A target twice the block in both directions is tiled.
+        let r = d.paste(Range::new(CellRef::new(0, 0), CellRef::new(3, 3)), &block, None).unwrap();
+        assert_eq!(r, Range::new(CellRef::new(0, 0), CellRef::new(3, 3)));
+        assert_eq!(text(&d), "x,y,x,y\n1,,1,\nx,y,x,y\n1,,1,\n");
+        d.undo();
+        // A target that is not a multiple takes one copy at its corner.
+        d.paste(Range::new(CellRef::new(0, 0), CellRef::new(2, 2)), &block, None).unwrap();
+        assert_eq!(text(&d), "x,y,c\n1,,3\n", "the block's missing cell pastes as a blank");
+        d.undo();
+        // Cut: the source is emptied in the same step.
+        let src = Range::new(CellRef::new(1, 0), CellRef::new(1, 1));
+        let cells = vec![vec![Cell::from("1"), Cell::from("2")]];
+        d.paste(Range::cell(CellRef::new(0, 1)), &cells, Some(src)).unwrap();
+        assert_eq!(text(&d), "a,1,2\n,,3\n");
+        assert_eq!(d.history.undo_label(), Some("Move"));
+        d.undo();
+        assert_eq!(text(&d), "a,b,c\n1,2,3\n");
+        assert!(d.paste(Range::cell(CellRef::new(0, 0)), &[], None).is_none());
     }
 
     #[test]

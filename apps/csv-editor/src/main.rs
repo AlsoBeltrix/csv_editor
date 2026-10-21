@@ -72,6 +72,7 @@ fn services() -> Services {
                 .add_filter("All files", &["*"])
                 .save_file()
         })),
+        paste_text: Some(std::rc::Rc::new(|| arboard::Clipboard::new().ok()?.get_text().ok())),
     }
 }
 

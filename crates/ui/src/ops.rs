@@ -1,11 +1,71 @@
 //! Editing operations on a document, driven by its selection. Shared by the menu bar, the grid's
 //! context menu and the keyboard shortcuts, so each exists once.
 
-use csv_editor_table::{CellRef, Range};
+use csv_editor_table::{Cell, CellRef, Range, Row, Selection, io};
 use egui::{Button, Ui};
 
-use crate::grid::{self, GridState};
+use crate::grid::{self, Clip, GridState};
 use crate::view::DocView;
+
+/// The current range clipped to the table's extent, as cells (empty past short rows).
+fn current_cells(view: &DocView) -> (Range, Vec<Row>) {
+    let table = &view.doc.table;
+    let r = view.sel.current();
+    let end = CellRef::new(
+        r.end.row.min(table.row_count().saturating_sub(1)).max(r.start.row),
+        r.end.col.min(table.width().saturating_sub(1)).max(r.start.col),
+    );
+    let r = Range::new(r.start, end);
+    let rows = r.rows().map(|row| r.cols().map(|c| Cell::from(table.get(row, c))).collect()).collect();
+    (r, rows)
+}
+
+/// Copies the current range to the system clipboard (tab-separated) and the editor's own.
+pub fn copy(grid: &mut GridState, view: &mut DocView, ctx: &egui::Context) -> bool {
+    grid::commit_edit(grid, view);
+    let (_, cells) = current_cells(view);
+    let text = io::block_text(&cells);
+    ctx.copy_text(text.clone());
+    grid.clip = Some(Clip { text, cells, cut: None });
+    true
+}
+
+/// Like [`copy`], and the source is emptied when the block is pasted.
+pub fn cut(grid: &mut GridState, view: &mut DocView, ctx: &egui::Context) -> bool {
+    copy(grid, view, ctx);
+    let (range, _) = current_cells(view);
+    if let Some(clip) = grid.clip.as_mut() {
+        clip.cut = Some(range);
+    }
+    true
+}
+
+/// Pastes `text` (what the system clipboard holds; read through the host when `None`). Text that
+/// matches the editor's own clipboard pastes those cells exactly, carrying a cut along.
+pub fn paste(grid: &mut GridState, view: &mut DocView, text: Option<String>) -> bool {
+    grid::commit_edit(grid, view);
+    let text = text.or_else(|| grid.paste_text.as_ref().and_then(|read| read()));
+    let same = |a: &str, b: &str| a.replace("\r\n", "\n") == b.replace("\r\n", "\n");
+    let (cells, cut) = match (&grid.clip, &text) {
+        (Some(clip), Some(t)) if same(&clip.text, t) => (clip.cells.clone(), clip.cut),
+        (Some(clip), None) => (clip.cells.clone(), clip.cut),
+        (_, Some(t)) => (io::parse_block(t), None),
+        (None, None) => return false,
+    };
+    let target = view.sel.current();
+    match view.doc.paste(target, &cells, cut) {
+        Some(r) => {
+            view.sel = Selection::range(r);
+            if cut.is_some()
+                && let Some(clip) = grid.clip.as_mut()
+            {
+                clip.cut = None;
+            }
+            true
+        }
+        None => false,
+    }
+}
 
 fn bounds(view: &DocView) -> Range {
     view.sel.bounds()
@@ -176,6 +236,19 @@ pub fn edit_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
     }
     if item(ui, can_redo, redo_label, "Ctrl+Y") {
         redo(grid, view);
+        ui.close();
+    }
+    ui.separator();
+    if item(ui, true, "Cut", "Ctrl+X") {
+        cut(grid, view, ui.ctx());
+        ui.close();
+    }
+    if item(ui, true, "Copy", "Ctrl+C") {
+        copy(grid, view, ui.ctx());
+        ui.close();
+    }
+    if item(ui, grid.clip.is_some() || grid.paste_text.is_some(), "Paste", "Ctrl+V") {
+        paste(grid, view, None);
         ui.close();
     }
     ui.separator();

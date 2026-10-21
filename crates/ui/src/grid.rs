@@ -4,7 +4,9 @@
 //! columns (`DocView::scroll_row` / `scroll_col`), so a million rows never meet f32 precision. The
 //! scrollbars are drawn by hand (after GridCraft's `grid.rs`, MIT, see `ATTRIBUTION.md`).
 
-use csv_editor_table::{CellRef, Range, Selection, column_label, selection};
+use std::rc::Rc;
+
+use csv_editor_table::{CellRef, Range, Row, Selection, column_label, selection};
 use egui::{Align2, Color32, CursorIcon, Event, EventFilter, Key, Modifiers, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 
 use crate::EditorApp;
@@ -18,7 +20,7 @@ pub const MAX_COL_WIDTH: f32 = 2000.0;
 pub const MIN_ZOOM: f32 = 0.5;
 pub const MAX_ZOOM: f32 = 2.0;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GridState {
     pub default_col_width: f32,
     pub row_height: f32,
@@ -28,9 +30,23 @@ pub struct GridState {
     pub editor: Option<CellEditor>,
     /// A request to rename this column's header, picked up by the app's dialog.
     pub rename_request: Option<usize>,
+    /// The last copied or cut block, kept as cells so a paste within the editor is exact.
+    pub clip: Option<Clip>,
+    /// Reads the system clipboard, for the menu's Paste (Ctrl+V arrives as an egui event).
+    pub paste_text: Option<Rc<dyn Fn() -> Option<String>>>,
     drag: Option<Drag>,
     /// Wheel movement not yet turned into whole rows and columns.
     wheel: Vec2,
+}
+
+/// A copied or cut block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Clip {
+    /// The block as tab-separated text, as handed to the system clipboard.
+    pub text: String,
+    pub cells: Vec<Row>,
+    /// The source range of a cut, emptied when the block is pasted.
+    pub cut: Option<Range>,
 }
 
 /// Text being typed into a cell.
@@ -63,6 +79,8 @@ impl Default for GridState {
             rename_request: None,
             drag: None,
             wheel: Vec2::ZERO,
+            clip: None,
+            paste_text: None,
         }
     }
 }
@@ -662,18 +680,32 @@ fn step(view: &mut DocView, dr: i64, dc: i64, shift: bool, jump: bool) {
 }
 
 fn keyboard(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, geo: &Geo) {
-    let (keys, typed): (Vec<(Key, Modifiers)>, String) = ui.input(|i| {
+    let (keys, typed, copy, cut, paste): (Vec<(Key, Modifiers)>, String, bool, bool, Option<String>) = ui.input(|i| {
         let mut keys = Vec::new();
         let mut typed = String::new();
+        let (mut copy, mut cut, mut paste) = (false, false, None);
         for e in &i.events {
             match e {
                 Event::Key { key, pressed: true, modifiers, .. } => keys.push((*key, *modifiers)),
                 Event::Text(s) => typed.push_str(s),
+                Event::Copy => copy = true,
+                Event::Cut => cut = true,
+                Event::Paste(s) => paste = Some(s.clone()),
                 _ => {}
             }
         }
-        (keys, typed)
+        (keys, typed, copy, cut, paste)
     });
+    if copy {
+        crate::ops::copy(grid, view, ui.ctx());
+    }
+    if cut {
+        crate::ops::cut(grid, view, ui.ctx());
+    }
+    if let Some(text) = paste {
+        crate::ops::paste(grid, view, Some(text));
+        ensure_visible(grid, view, geo);
+    }
     if !typed.is_empty() && !typed.chars().all(char::is_control) {
         // The typed text opens the editor with that text; the text field must not see it again.
         ui.input_mut(|i| i.events.retain(|e| !matches!(e, Event::Text(_))));
