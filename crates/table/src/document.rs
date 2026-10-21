@@ -175,6 +175,43 @@ impl Document {
         self.apply("Move rows", Edit::MoveRows { from, count, to })
     }
 
+    /// Inserts blank rows before (or after) each run of consecutive indices in `rows`, as many as
+    /// the run has. Runs past the table insert at its end.
+    pub fn insert_rows_at_runs(&mut self, rows: &[usize], after: bool) -> bool {
+        let mut rows: Vec<usize> = rows.to_vec();
+        rows.sort_unstable();
+        rows.dedup();
+        if rows.is_empty() {
+            return false;
+        }
+        let width = self.table.width();
+        let n = self.table.row_count();
+        // Later runs first, so earlier insertions do not shift them.
+        let edits: Vec<Edit> = crate::cleanup::runs(&rows)
+            .into_iter()
+            .rev()
+            .map(|(at, count)| Edit::InsertRows { at: (if after { at + count } else { at }).min(n), rows: vec![vec![Cell::default(); width]; count] })
+            .collect();
+        self.apply("Insert rows", Edit::Batch(edits))
+    }
+
+    /// Inserts blank columns left of (or right of) each run of consecutive indices in `cols`.
+    pub fn insert_cols_at_runs(&mut self, cols: &[usize], after: bool) -> bool {
+        let mut cols: Vec<usize> = cols.to_vec();
+        cols.sort_unstable();
+        cols.dedup();
+        if cols.is_empty() {
+            return false;
+        }
+        let w = self.table.width();
+        let edits: Vec<Edit> = crate::cleanup::runs(&cols)
+            .into_iter()
+            .rev()
+            .map(|(at, count)| Edit::InsertCols { at: (if after { at + count } else { at }).min(w), count, cells: None })
+            .collect();
+        self.apply("Insert columns", Edit::Batch(edits))
+    }
+
     /// Deletes exactly these rows (any order, duplicates ignored, rows past the table ignored).
     pub fn delete_row_set(&mut self, rows: &[usize]) -> bool {
         let n = self.table.row_count();
@@ -416,6 +453,22 @@ mod tests {
         d.undo();
         assert_eq!(text(&d), "a,b,c\n1,2,3\n");
         assert!(d.paste(Range::cell(CellRef::new(0, 0)), &[], None).is_none());
+    }
+
+    #[test]
+    fn inserts_land_at_every_run() {
+        let mut d = doc("h\na\nb\nc\n");
+        assert!(d.insert_rows_at_runs(&[1, 3], false));
+        assert_eq!(text(&d), "h\n\na\nb\n\nc\n");
+        d.undo();
+        assert!(d.insert_rows_at_runs(&[1, 2, 3], true));
+        assert_eq!(text(&d), "h\na\nb\nc\n\n\n\n", "one run of three: three rows after it");
+        d.undo();
+        assert!(d.insert_rows_at_runs(&[40], false), "past the table: at the end");
+        assert_eq!(d.table.row_count(), 5);
+        let mut d = doc("a,b,c\n1,2,3\n");
+        assert!(d.insert_cols_at_runs(&[0, 2], true));
+        assert_eq!(text(&d), "a,,b,c,\n1,,2,3,\n");
     }
 
     #[test]

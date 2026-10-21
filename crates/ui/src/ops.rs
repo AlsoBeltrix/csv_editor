@@ -193,20 +193,18 @@ pub fn fill_down(grid: &mut GridState, view: &mut DocView) -> bool {
 
 // ----- Rows ----------------------------------------------------------------------------------
 
-/// Inserts as many blank rows as are selected, above the topmost selected row.
+/// Inserts blank rows above each run of selected rows, as many as the run has (Excel's rule).
 pub fn insert_rows_above(grid: &mut GridState, view: &mut DocView) -> bool {
     grid::commit_edit(grid, view);
     let rows = selected_rows(view);
-    let Some(&first) = rows.first() else { return false };
-    view.doc.insert_rows(first, rows.len())
+    view.doc.insert_rows_at_runs(&rows, false)
 }
 
-/// Inserts as many blank rows as are selected, below the bottommost selected row.
+/// Inserts blank rows below each run of selected rows, as many as the run has.
 pub fn insert_rows_below(grid: &mut GridState, view: &mut DocView) -> bool {
     grid::commit_edit(grid, view);
     let rows = selected_rows(view);
-    let Some(&last) = rows.last() else { return false };
-    view.doc.insert_rows(last + 1, rows.len())
+    view.doc.insert_rows_at_runs(&rows, true)
 }
 
 /// Deletes exactly the selected rows.
@@ -257,18 +255,17 @@ pub fn move_rows(grid: &mut GridState, view: &mut DocView, delta: i64) -> bool {
 
 // ----- Columns -------------------------------------------------------------------------------
 
+/// Inserts blank columns left of each run of selected columns, as many as the run has.
 pub fn insert_cols_left(grid: &mut GridState, view: &mut DocView) -> bool {
     grid::commit_edit(grid, view);
     let cols = selected_cols(view);
-    let Some(&first) = cols.first() else { return false };
-    view.doc.insert_cols(first, cols.len())
+    view.doc.insert_cols_at_runs(&cols, false)
 }
 
 pub fn insert_cols_right(grid: &mut GridState, view: &mut DocView) -> bool {
     grid::commit_edit(grid, view);
     let cols = selected_cols(view);
-    let Some(&last) = cols.last() else { return false };
-    view.doc.insert_cols(last + 1, cols.len())
+    view.doc.insert_cols_at_runs(&cols, true)
 }
 
 /// Deletes exactly the selected columns.
@@ -434,11 +431,13 @@ pub fn rows_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
     let which = describe_rows(&rows);
     let which_existing = describe_rows(&existing);
     ui.label(egui::RichText::new(format!("Selected: {which}")).weak());
-    if item(ui, !rows.is_empty(), format!("Insert {n} blank {s} above"), "") {
+    let where_rows = if runs(&rows).len() > 1 { " (above each)" } else { "" };
+    if item(ui, !rows.is_empty(), format!("Insert {n} blank {s} above{where_rows}"), "") {
         insert_rows_above(grid, view);
         ui.close();
     }
-    if item(ui, !rows.is_empty(), format!("Insert {n} blank {s} below"), "") {
+    let where_rows = if runs(&rows).len() > 1 { " (below each)" } else { "" };
+    if item(ui, !rows.is_empty(), format!("Insert {n} blank {s} below{where_rows}"), "") {
         insert_rows_below(grid, view);
         ui.close();
     }
@@ -485,11 +484,13 @@ pub fn cols_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
     let which = describe_cols(&cols);
     let which_existing = describe_cols(&existing);
     ui.label(egui::RichText::new(format!("Selected: {which}")).weak());
-    if item(ui, !cols.is_empty(), format!("Insert {n} blank {s} left"), "") {
+    let where_cols = if runs(&cols).len() > 1 { " (left of each)" } else { "" };
+    if item(ui, !cols.is_empty(), format!("Insert {n} blank {s} left{where_cols}"), "") {
         insert_cols_left(grid, view);
         ui.close();
     }
-    if item(ui, !cols.is_empty(), format!("Insert {n} blank {s} right"), "") {
+    let where_cols = if runs(&cols).len() > 1 { " (right of each)" } else { "" };
+    if item(ui, !cols.is_empty(), format!("Insert {n} blank {s} right{where_cols}"), "") {
         insert_cols_right(grid, view);
         ui.close();
     }
@@ -651,8 +652,12 @@ mod tests {
         select(&mut v, &[(2, 0, 2, 0), (5, 0, 5, 0)]);
         assert!(!move_rows(&mut g, &mut v, 1), "a gap means no move");
         assert!(insert_rows_above(&mut g, &mut v));
-        assert_eq!(v.doc.table.row_count(), 8, "two selected rows: two blank rows above the first");
-        assert_eq!(text(&v), "h\na\n\n\nb\nc\nd\ne\n");
+        assert_eq!(v.doc.table.row_count(), 8, "one blank row above each selected row");
+        assert_eq!(text(&v), "h\na\n\nb\nc\nd\n\ne\n");
+        assert!(undo(&mut g, &mut v));
+        select(&mut v, &[(2, 0, 2, 0), (5, 0, 5, 0)]);
+        assert!(insert_rows_below(&mut g, &mut v));
+        assert_eq!(text(&v), "h\na\nb\n\nc\nd\ne\n\n");
     }
 
     #[test]

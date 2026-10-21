@@ -46,6 +46,8 @@ pub struct GridState {
     pub note: Option<String>,
     /// Where the last right-click landed, deciding which context menu opens.
     pub context_zone: Zone,
+    /// Last frame's body rectangle and the default sizes, so tests can aim clicks at cells.
+    pub last_cells: Option<Rect>,
     /// The last copied or cut block, kept as cells so a paste within the editor is exact.
     pub clip: Option<Clip>,
     /// Reads the system clipboard, for the menu's Paste (Ctrl+V arrives as an egui event).
@@ -112,6 +114,7 @@ impl Default for GridState {
             goto_request: false,
             note: None,
             context_zone: Zone::Cells,
+            last_cells: None,
         }
     }
 }
@@ -358,6 +361,7 @@ pub fn show(app: &mut EditorApp, ui: &mut egui::Ui, t: &Tokens) {
     interact(grid, view, ui, &resp, &geo);
     // Interaction may have scrolled or resized: lay out again before painting.
     let geo = geometry(grid, view, rect);
+    grid.last_cells = Some(geo.cells);
     paint(ui, &geo, view, t);
     vertical_scrollbar(view, ui, vtrack, &geo, t);
     horizontal_scrollbar(view, ui, htrack, &geo, t);

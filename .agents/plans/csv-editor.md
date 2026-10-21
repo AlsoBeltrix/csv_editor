@@ -153,7 +153,9 @@ Findings from the owner's first hands-on session and how they were resolved:
 3. Row and column operations act on exactly the rows (columns) that contain a selected cell,
    never on the gap between disconnected selections. Delete and duplicate name their targets
    ("Delete rows 2, 5–6"); moves need a contiguous block; row operations are disabled when
-   whole columns are selected and vice versa.
+   whole columns are selected and vice versa. Insert adds blank rows (columns) at *each* run of
+   selected rows (columns), as many as the run has, as Excel does. A headless test drives a real
+   Ctrl+click through the grid and checks delete, delete columns and insert on the result.
 
 ## Follow-ups (not started)
 

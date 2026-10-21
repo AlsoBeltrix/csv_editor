@@ -225,6 +225,61 @@ fn find_sort_and_filter_work_through_the_interface() {
     assert_eq!(h.state().docs[0].visible_count(), 4);
 }
 
+/// Clicks the centre of a cell with the mouse (default sizes: 96-point columns, 22-point rows).
+fn click_cell(h: &mut Harness<'_, EditorApp>, row: usize, col: usize, modifiers: Modifiers) {
+    let cells = h.state().grid.last_cells.expect("the grid has been drawn");
+    let pos = egui::pos2(cells.left() + 96.0 * col as f32 + 48.0, cells.top() + 22.0 * row as f32 + 11.0);
+    // Like a real press: the modifier state changes before the button goes down and reverts after.
+    h.input_mut().events.push(Event::ModifiersChanged(modifiers));
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    h.input_mut().events.push(Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers });
+    h.step();
+    h.input_mut().events.push(Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    h.step();
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run();
+}
+
+#[test]
+fn ctrl_clicked_cells_drive_row_and_column_operations_exactly() {
+    let mut h = harness(app("h1,h2,h3\r\na1,a2,a3\r\nb1,b2,b3\r\nc1,c2,c3\r\nd1,d2,d3\r\ne1,e2,e3\r\n"));
+    click_cell(&mut h, 1, 0, Modifiers::NONE);
+    click_cell(&mut h, 4, 2, Modifiers::COMMAND);
+    assert_eq!(h.state().docs[0].sel.ranges.len(), 2, "Ctrl+click adds a second range");
+    assert_eq!(csv_editor_ui::ops::selected_rows(&h.state().docs[0]), vec![1, 4]);
+    assert_eq!(csv_editor_ui::ops::selected_cols(&h.state().docs[0]), vec![0, 2]);
+    {
+        let EditorApp { grid, docs, active, .. } = h.state_mut();
+        assert!(csv_editor_ui::ops::delete_rows(grid, &mut docs[*active]));
+    }
+    h.run();
+    let col0: Vec<String> = (0..4).map(|r| cell(&h, r, 0)).collect();
+    assert_eq!(col0, vec!["h1", "b1", "c1", "e1"], "only rows 2 and 5 are gone");
+    assert_eq!(h.state().docs[0].doc.table.row_count(), 4);
+    press_with(&mut h, Modifiers::COMMAND, Key::Z);
+    h.run();
+    click_cell(&mut h, 1, 0, Modifiers::NONE);
+    click_cell(&mut h, 4, 2, Modifiers::COMMAND);
+    {
+        let EditorApp { grid, docs, active, .. } = h.state_mut();
+        assert!(csv_editor_ui::ops::delete_cols(grid, &mut docs[*active]));
+    }
+    h.run();
+    assert_eq!(h.state().docs[0].doc.table.width(), 1);
+    assert_eq!((cell(&h, 0, 0), cell(&h, 1, 0)), ("h2".to_string(), "a2".to_string()), "only columns A and C are gone");
+    press_with(&mut h, Modifiers::COMMAND, Key::Z);
+    h.run();
+    click_cell(&mut h, 1, 0, Modifiers::NONE);
+    click_cell(&mut h, 4, 2, Modifiers::COMMAND);
+    {
+        let EditorApp { grid, docs, active, .. } = h.state_mut();
+        assert!(csv_editor_ui::ops::insert_rows_above(grid, &mut docs[*active]));
+    }
+    h.run();
+    let col0: Vec<String> = (0..8).map(|r| cell(&h, r, 0)).collect();
+    assert_eq!(col0, vec!["h1", "", "a1", "b1", "c1", "", "d1", "e1"], "a blank row above each selected row");
+}
+
 #[test]
 fn a_new_document_starts_empty_and_saves_only_what_was_typed() {
     let mut h = harness(EditorApp::new(Services::default()));
