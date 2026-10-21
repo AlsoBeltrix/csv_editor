@@ -36,10 +36,11 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master` (no rem
   The owner re-tested the release build on a real 7,294-row file after round 2 and accepted it,
   then asked to "keep optimizing" (2026-10-21): slice 9 (performance) landed — UTF-8 parsed from
   the file bytes without a decoded copy, saves streamed row by row, wgpu device created with the
-  memory-usage hint (DirectX 12 heaps on an integrated GPU were 290 MB of the process). 100 MB
-  soak: open 0.42 s, save 0.20 s, app peak 607 MB (was 837), 200 MB with a tiny file (was 443).
+  memory-usage hint (DirectX 12 heaps on an integrated GPU were 290 MB of the process), cells
+  packed to 24 bytes (quote flag as the first byte of the cell's string). 100 MB soak: open
+  0.45 s, save 0.22 s, app peak 524 MB (was 837), 200 MB with a tiny file (was 443).
   Next action: owner re-tests; further optimization candidates are the follow-ups at the end of
-  the plan (24-byte cells via a `Row` struct, parallel parse, lazy CJK fonts).
+  the plan (parallel parse, lazy CJK fonts).
 
 ## Facts
 

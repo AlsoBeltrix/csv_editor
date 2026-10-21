@@ -25,7 +25,7 @@ Large-file soak (this machine, Intel integrated GPU): a 100.3 MB, 1,357,661-row 
 opened in 0.70 s (release) / 1.15 s (dev profile) with a peak working set of 702 MB / 831 MB. The
 release executable is 16.3 MB. After the per-cell quote flag (cells 24 → 32 bytes): 0.58 s and
 765 MB in release. After slice 9 (measured with a poller of the peak working set, which reads
-higher than the earlier method): 0.42 s open, 0.20 s save, 607 MB peak; see slice 9.
+higher than the earlier method): 0.45 s open, 0.22 s save, 524 MB peak; see slice 9.
 
 ## Goal
 
@@ -199,14 +199,15 @@ Results (same file and method): open 0.42 s, save 0.20 s; soak example peak 488 
 (was 443 MB). What remains in the app's baseline: 48 MB of system font files (four CJK and
 symbol faces egui keeps in memory) and about 150 MB of DirectX 12 driver and runtime.
 
-Not done: shrinking `Cell` from 32 to 24 bytes (the `quoted` flag pads the 24-byte
-`CompactString`). It would cut the table by about 87 MB on this file but means replacing
-`Row = Vec<Cell>` with a struct carrying a bit set, touching every row operation. Listed below.
+Then `Cell` went from 32 to 24 bytes: the quote flag is the first byte of the cell's own
+`CompactString` (`"` or a space) and the text is the rest, so the flag no longer pads the struct
+and `Row = Vec<Cell>` is untouched (the flag was read at four places outside the type). On this
+file: table 381 → 298 MB; soak example peak 488 → 405 MB; app peak 607 → 524 MB. Building each
+cell as prefix plus text costs about 30 ms on the open (0.42 → 0.45 s, within run-to-run noise).
+A size test pins the 24 bytes.
 
 ## Follow-ups (not started)
 
-- Memory: `Cell` is 32 bytes because of the `quoted` flag; a `Row` struct with a per-row bit set
-  would bring cells back to 24 bytes (about a quarter of the table).
 - Parse in parallel (split at record boundaries outside quotes) for files past a few hundred MB.
 - Fonts: the CJK fallback faces cost 48 MB whether or not the data needs them; loading them on
   the first missing glyph would need a font-fallback hook egui does not have yet.

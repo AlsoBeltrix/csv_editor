@@ -112,7 +112,7 @@ pub(crate) fn parse_records(text: &str, delim: u8, quote: u8, mut on_record: imp
             let tail = i;
             i = scan(i, &is_break);
             s.push_str(text.get(tail..i).unwrap_or(""));
-            Cell { text: s.into(), quoted: true }
+            Cell::new_quoted(s)
         } else {
             let start = i;
             i = scan(i, &is_break);
@@ -177,7 +177,7 @@ pub fn write_to(table: &Table, d: &Dialect, out: &mut impl Write) -> std::io::Re
             if c > 0 {
                 line.push(delim);
             }
-            let (text, quoted) = row.get(c).map_or(("", false), |s| (s.as_str(), s.quoted));
+            let (text, quoted) = row.get(c).map_or(("", false), |s| (s.as_str(), s.quoted()));
             let quoting = if quoted && d.quoting == Quoting::AsSource { Quoting::All } else { d.quoting };
             write_field(&mut line, text, delim, q, quoting);
         }
@@ -208,12 +208,9 @@ pub fn write(table: &Table, d: &Dialect) -> (Vec<u8>, usize) {
 /// without tabs or line breaks is a single cell.
 pub fn parse_block(text: &str) -> Vec<Row> {
     let mut rows = Vec::new();
-    parse_records(text, b'\t', b'"', |mut r| {
+    parse_records(text, b'\t', b'"', |r| {
         // Clipboard quoting says nothing about the file: pasted text is new text.
-        for c in &mut r {
-            c.quoted = false;
-        }
-        rows.push(r);
+        rows.push(r.into_iter().map(Cell::unquoted).collect());
     });
     rows
 }
@@ -370,7 +367,7 @@ mod tests {
         assert_eq!(String::from_utf8(write(&t, &Dialect { quoting: Quoting::Minimal, ..d }).0).unwrap(), "a,b,c\r\n");
         assert_eq!(String::from_utf8(write(&t, &Dialect { quoting: Quoting::All, ..d }).0).unwrap(), "\"a\",\"b\",\"c\"\r\n");
         // Clipboard text does not count as source quoting.
-        assert!(parse_block("\"x\"\ty").iter().flatten().all(|c| !c.quoted));
+        assert!(parse_block("\"x\"\ty").iter().flatten().all(|c| !c.quoted()));
     }
 
     #[test]

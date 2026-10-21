@@ -9,23 +9,56 @@ use compact_str::CompactString;
 /// One cell: its text, and whether the file had it in quotes. Short texts live inline (no heap
 /// allocation), which is most CSV fields.
 ///
-/// `quoted` is what makes a mixed-quoting file round-trip: an untouched cell is written back the
-/// way it came. Any new text (typing, paste, cleanup) starts unquoted and is quoted on save only
-/// when it needs to be. Equality and hashing look at the text alone; the flag is a note about
-/// the file, not part of the value.
-#[derive(Clone, Debug, Default)]
-pub struct Cell {
-    pub text: CompactString,
-    pub quoted: bool,
-}
+/// The quote flag is what makes a mixed-quoting file round-trip: an untouched cell is written
+/// back the way it came. Any new text (typing, paste, cleanup) starts unquoted and is quoted on
+/// save only when it needs to be. Equality and hashing look at the text alone; the flag is a
+/// note about the file, not part of the value.
+///
+/// Layout: one `CompactString` whose first byte is the flag (`"` quoted, a space otherwise) and
+/// whose rest is the text. A separate `bool` would pad the cell from 24 to 32 bytes, a quarter
+/// of a large table; this way the text is still a plain string slice. An empty string (the
+/// default) reads as an unquoted empty cell.
+#[derive(Clone, Default)]
+pub struct Cell(CompactString);
+
+const QUOTED: u8 = b'"';
+const PLAIN: u8 = b' ';
 
 impl Cell {
-    pub fn new(text: impl Into<CompactString>) -> Cell {
-        Cell { text: text.into(), quoted: false }
+    pub fn new(text: impl AsRef<str>) -> Cell {
+        Cell::with_flag(PLAIN, text.as_ref())
+    }
+
+    /// A cell the file had in quotes.
+    pub fn new_quoted(text: impl AsRef<str>) -> Cell {
+        Cell::with_flag(QUOTED, text.as_ref())
+    }
+
+    fn with_flag(flag: u8, text: &str) -> Cell {
+        let mut s = CompactString::with_capacity(text.len() + 1);
+        s.push_str(if flag == QUOTED { "\"" } else { " " });
+        s.push_str(text);
+        Cell(s)
     }
 
     pub fn as_str(&self) -> &str {
-        self.text.as_str()
+        self.0.get(1..).unwrap_or("")
+    }
+
+    /// Whether the file had this cell in quotes.
+    pub fn quoted(&self) -> bool {
+        self.0.as_bytes().first() == Some(&QUOTED)
+    }
+
+    /// The same text, marked as not from the file (written with quotes only when needed).
+    pub fn unquoted(self) -> Cell {
+        if self.quoted() { Cell::new(self.as_str()) } else { self }
+    }
+}
+
+impl std::fmt::Debug for Cell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cell").field("text", &self.as_str()).field("quoted", &self.quoted()).finish()
     }
 }
 
@@ -33,13 +66,13 @@ impl Deref for Cell {
     type Target = str;
 
     fn deref(&self) -> &str {
-        self.text.as_str()
+        self.as_str()
     }
 }
 
 impl PartialEq for Cell {
     fn eq(&self, other: &Cell) -> bool {
-        self.text == other.text
+        self.as_str() == other.as_str()
     }
 }
 
@@ -47,7 +80,7 @@ impl Eq for Cell {}
 
 impl std::hash::Hash for Cell {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.text.hash(state);
+        self.as_str().hash(state);
     }
 }
 
@@ -71,7 +104,7 @@ impl From<CompactString> for Cell {
 
 impl PartialEq<str> for Cell {
     fn eq(&self, other: &str) -> bool {
-        self.text == other
+        self.as_str() == other
     }
 }
 
@@ -303,6 +336,19 @@ pub(crate) fn table_of(rows: &[&[&str]]) -> Table {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cell_is_one_compact_string() {
+        assert_eq!(std::mem::size_of::<Cell>(), std::mem::size_of::<CompactString>());
+        let c = Cell::new_quoted("a\"b");
+        assert_eq!(c.as_str(), "a\"b");
+        assert!(c.quoted());
+        assert_eq!(c, Cell::new("a\"b"), "equality ignores the flag");
+        assert!(!c.clone().unquoted().quoted());
+        assert_eq!(Cell::default().as_str(), "");
+        assert!(!Cell::default().quoted());
+        assert_eq!(format!("{:?}", Cell::new_quoted("x")), "Cell { text: \"x\", quoted: true }");
+    }
 
     #[test]
     fn get_reads_empty_for_missing_cells() {
