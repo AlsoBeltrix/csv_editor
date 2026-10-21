@@ -53,6 +53,8 @@ impl Encoding {
 /// When fields are wrapped in quotes on save.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Quoting {
+    /// Untouched fields as they were in the file; new or edited text only when it needs quotes.
+    AsSource,
     /// Only fields that contain the delimiter, the quote character or a line break.
     Minimal,
     /// Every field.
@@ -60,8 +62,11 @@ pub enum Quoting {
 }
 
 impl Quoting {
+    pub const ALL: [Quoting; 3] = [Quoting::AsSource, Quoting::Minimal, Quoting::All];
+
     pub fn label(self) -> &'static str {
         match self {
+            Quoting::AsSource => "As in the file (edited text only when needed)",
             Quoting::Minimal => "Only when needed",
             Quoting::All => "Every field",
         }
@@ -91,7 +96,7 @@ impl Default for Dialect {
             quote: b'"',
             line_ending: LineEnding::Crlf,
             encoding: Encoding::Utf8,
-            quoting: Quoting::Minimal,
+            quoting: Quoting::AsSource,
             trailing_newline: true,
             pad_rows: true,
             header: true,

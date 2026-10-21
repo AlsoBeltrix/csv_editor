@@ -73,8 +73,11 @@ Ported from GridCraft (adapted): `csv.rs` decoder + delimiter sniffer → `table
 - `Dialect { delimiter: u8, quote: u8, line_ending: Crlf|Lf|Cr, encoding: Utf8|Utf8Bom|Utf16Le|
   Utf16Be|Cp1252, quoting: Minimal|All|AsSource, trailing_newline: bool, header: bool }`,
   detected on open, editable in a dialog, applied on save.
-- Quote fidelity: the reader records whether each source field was quoted only as an aggregate
-  policy (all / minimal / mixed → minimal). Per-cell quote flags are out of scope.
+- Quote fidelity: every cell carries a `quoted` flag set by the parser. With the dialect's
+  quoting at `AsSource` (the default for opened files) an untouched cell is written back as it
+  came; new or edited text is quoted only when it needs to be. `Minimal` strips optional quotes,
+  `All` quotes everything. The flag rides inside the cell, so moves, sorts, undo and copies keep
+  it; equality ignores it.
 - `Edit` enum with `apply` and `invert`: `SetCell`, `SetCells` (rect), `InsertRows`, `DeleteRows`
   (stores removed rows), `InsertCols`, `DeleteCols`, `MoveRows`, `MoveCols`, `ReorderRows`
   (sort: stores the permutation), `Replace` (batch of SetCell). Undo/redo stacks of `Edit`.
@@ -161,11 +164,18 @@ Findings from the owner's first hands-on session and how they were resolved:
    Selection now happens on mouse down with that event's modifiers, as in a spreadsheet; the
    test releases Ctrl before the button and fails against the old code.
 
+## Owner review round 2 (2026-10-21)
+
+Quotes around fields that did not need them were dropped on save (the writer knew only an
+aggregate policy). Fixed by the per-cell `quoted` flag described under Table model: mixed-quoting
+files now round-trip byte for byte, edits follow the minimal rule, and the dialect dialog offers
+"As in the file", "Only when needed" and "Every field".
+
 ## Follow-ups (not started)
 
 - Memory: parsing decodes the whole file into a `String` before splitting it; a UTF-8 file could
   be parsed straight from its bytes to cut the peak by about the file size.
-- Multi-column sort, per-cell quote preservation, column drag-reordering with the mouse, a dashed
+- Multi-column sort, column drag-reordering with the mouse, a dashed
   marquee on the cut/copy source, a Windows installer and file association.
 
 ## Out of scope (v1)

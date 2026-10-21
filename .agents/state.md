@@ -30,7 +30,8 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master` (no rem
   adjustable row heights, and row/column operations defined on exactly the selected rows and
   columns with descriptive menu labels (see the plan's review section). Round 1b: selection
   happens on mouse down with that press's modifiers (Ctrl released before the button no longer
-  drops the added range); inserts land at every selected run.
+  drops the added range); inserts land at every selected run. Round 2: per-cell quote
+  preservation (`Cell { text, quoted }`), quoting mode "As in the file" as the default.
   Next action: the owner re-tests (`cargo run --release -p csv-editor -- <file.csv>`) and reports
   the next round; follow-ups are listed at the end of the plan.
 

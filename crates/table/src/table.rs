@@ -2,10 +2,78 @@
 //! cell reads as empty. Every method validates its indices and returns `None`/`false` instead of
 //! panicking: the interface and the file are both untrusted sources of numbers.
 
+use std::ops::Deref;
+
 use compact_str::CompactString;
 
-/// One cell's text. Short texts live inline (no heap allocation), which is most CSV fields.
-pub type Cell = CompactString;
+/// One cell: its text, and whether the file had it in quotes. Short texts live inline (no heap
+/// allocation), which is most CSV fields.
+///
+/// `quoted` is what makes a mixed-quoting file round-trip: an untouched cell is written back the
+/// way it came. Any new text (typing, paste, cleanup) starts unquoted and is quoted on save only
+/// when it needs to be. Equality and hashing look at the text alone; the flag is a note about
+/// the file, not part of the value.
+#[derive(Clone, Debug, Default)]
+pub struct Cell {
+    pub text: CompactString,
+    pub quoted: bool,
+}
+
+impl Cell {
+    pub fn new(text: impl Into<CompactString>) -> Cell {
+        Cell { text: text.into(), quoted: false }
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.text.as_str()
+    }
+}
+
+impl Deref for Cell {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.text.as_str()
+    }
+}
+
+impl PartialEq for Cell {
+    fn eq(&self, other: &Cell) -> bool {
+        self.text == other.text
+    }
+}
+
+impl Eq for Cell {}
+
+impl std::hash::Hash for Cell {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.text.hash(state);
+    }
+}
+
+impl From<&str> for Cell {
+    fn from(s: &str) -> Cell {
+        Cell::new(s)
+    }
+}
+
+impl From<String> for Cell {
+    fn from(s: String) -> Cell {
+        Cell::new(s)
+    }
+}
+
+impl From<CompactString> for Cell {
+    fn from(s: CompactString) -> Cell {
+        Cell::new(s)
+    }
+}
+
+impl PartialEq<str> for Cell {
+    fn eq(&self, other: &str) -> bool {
+        self.text == other
+    }
+}
 
 pub type Row = Vec<Cell>;
 

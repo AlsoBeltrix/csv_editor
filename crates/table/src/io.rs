@@ -46,7 +46,7 @@ pub fn parse(bytes: &[u8], opts: &ParseOptions) -> Result<(Table, Dialect), Erro
     let stats = parse_records(&text, delimiter, quote, |rec| rows.push(rec));
     let width = rows.iter().map(Vec::len).max().unwrap_or(0);
     let pad_rows = rows.iter().all(|r| r.len() == width);
-    let quoting = if stats.fields > 0 && stats.quoted_fields == stats.fields { Quoting::All } else { Quoting::Minimal };
+    let quoting = if stats.fields > 0 && stats.quoted_fields == stats.fields { Quoting::All } else { Quoting::AsSource };
     let header = opts.header.unwrap_or_else(|| guess_header(&rows));
     let dialect = Dialect { delimiter, quote, line_ending, encoding, quoting, trailing_newline: stats.ended_with_terminator, pad_rows, header };
     Ok((Table::from_rows(rows), dialect))
@@ -109,7 +109,7 @@ pub(crate) fn parse_records(text: &str, delim: u8, quote: u8, mut on_record: imp
                 i += 1;
             }
             s.push_str(text.get(tail..i).unwrap_or(""));
-            Cell::from(s)
+            Cell { text: s.into(), quoted: true }
         } else {
             let start = i;
             while let Some(&c) = b.get(i) {
@@ -179,7 +179,9 @@ pub fn write(table: &Table, d: &Dialect) -> (Vec<u8>, usize) {
             if c > 0 {
                 out.push(delim);
             }
-            write_field(&mut out, row.get(c).map_or("", |s| s.as_str()), delim, q, d.quoting);
+            let (text, quoted) = row.get(c).map_or(("", false), |s| (s.as_str(), s.quoted));
+            let quoting = if quoted && d.quoting == Quoting::AsSource { Quoting::All } else { d.quoting };
+            write_field(&mut out, text, delim, q, quoting);
         }
         if ri + 1 < rows || d.trailing_newline {
             out.push_str(nl);
@@ -192,7 +194,13 @@ pub fn write(table: &Table, d: &Dialect) -> (Vec<u8>, usize) {
 /// without tabs or line breaks is a single cell.
 pub fn parse_block(text: &str) -> Vec<Row> {
     let mut rows = Vec::new();
-    parse_records(text, b'\t', b'"', |r| rows.push(r));
+    parse_records(text, b'\t', b'"', |mut r| {
+        // Clipboard quoting says nothing about the file: pasted text is new text.
+        for c in &mut r {
+            c.quoted = false;
+        }
+        rows.push(r);
+    });
     rows
 }
 
@@ -246,7 +254,7 @@ mod tests {
     fn parses_quotes_escapes_and_embedded_breaks() {
         let (t, d) = parsed("name,note\r\n\"Smith, J\",\"says \"\"hi\"\"\"\r\n\"multi\r\nline\",plain\r\n");
         assert_eq!(cells(&t), vec![vec!["name", "note"], vec!["Smith, J", "says \"hi\""], vec!["multi\r\nline", "plain"]]);
-        assert_eq!(d.quoting, Quoting::Minimal);
+        assert_eq!(d.quoting, Quoting::AsSource);
         assert!(d.header && d.trailing_newline && d.pad_rows);
         assert_eq!(d.line_ending, LineEnding::Crlf);
     }
@@ -297,7 +305,10 @@ mod tests {
 
     #[test]
     fn untouched_files_round_trip_byte_for_byte() {
-        let samples: [&[u8]; 10] = [
+        let samples: [&[u8]; 13] = [
+            b"a,\"b\",c\r\n\"1\",2,\"3\"\r\n",
+            b"\"name\",age\n\"Ann\",3\n\"\",4\n",
+            b"x,\"\"\r\n",
             b"a,b,c\r\n1,2,3\r\n",
             b"a,b,c\n1,2,3",
             b"a;b\n\"x;y\";\"q\"\"q\"\n",
@@ -315,6 +326,24 @@ mod tests {
             assert_eq!(lossy, 0);
             assert_eq!(out, bytes, "{:?}", String::from_utf8_lossy(bytes));
         }
+    }
+
+    #[test]
+    fn source_quotes_survive_untouched_cells_and_follow_edits() {
+        let (mut t, d) = parsed("a,\"b\",c\r\n");
+        assert_eq!(d.quoting, Quoting::AsSource);
+        assert!(t.get(0, 1) == "b");
+        // Editing a quoted cell: the new text is quoted only if it needs it.
+        t.set(0, 1, "bee");
+        assert_eq!(String::from_utf8(write(&t, &d).0).unwrap(), "a,bee,c\r\n");
+        t.set(0, 2, "c,d");
+        assert_eq!(String::from_utf8(write(&t, &d).0).unwrap(), "a,bee,\"c,d\"\r\n");
+        // Minimal strips the file's optional quotes; All quotes everything.
+        let (t, d) = parsed("a,\"b\",c\r\n");
+        assert_eq!(String::from_utf8(write(&t, &Dialect { quoting: Quoting::Minimal, ..d }).0).unwrap(), "a,b,c\r\n");
+        assert_eq!(String::from_utf8(write(&t, &Dialect { quoting: Quoting::All, ..d }).0).unwrap(), "\"a\",\"b\",\"c\"\r\n");
+        // Clipboard text does not count as source quoting.
+        assert!(parse_block("\"x\"\ty").iter().flatten().all(|c| !c.quoted));
     }
 
     #[test]

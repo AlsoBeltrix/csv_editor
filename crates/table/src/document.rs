@@ -456,6 +456,19 @@ mod tests {
     }
 
     #[test]
+    fn undo_brings_the_source_quotes_back() {
+        let mut d = doc("a,\"b\"\n");
+        assert!(d.set_cell(0, 1, "x"));
+        assert_eq!(text(&d), "a,x\n");
+        d.undo();
+        assert_eq!(text(&d), "a,\"b\"\n", "the restored cell is written as it came");
+        // A cut and paste carries the flag with the cell; a sort moves whole rows.
+        let mut d = doc("h\n\"z\"\na\n");
+        assert!(d.sort(1, crate::sort::SortSpec { col: 0, ascending: true, kind: crate::sort::SortKind::Text }));
+        assert_eq!(text(&d), "h\na\n\"z\"\n");
+    }
+
+    #[test]
     fn inserts_land_at_every_run() {
         let mut d = doc("h\na\nb\nc\n");
         assert!(d.insert_rows_at_runs(&[1, 3], false));

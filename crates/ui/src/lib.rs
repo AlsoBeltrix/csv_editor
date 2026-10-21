@@ -779,8 +779,9 @@ impl EditorApp {
                 ui.end_row();
                 ui.label("Quote fields");
                 egui::ComboBox::from_id_salt("dialect-quoting").selected_text(draft.quoting.label()).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut draft.quoting, Quoting::Minimal, Quoting::Minimal.label());
-                    ui.selectable_value(&mut draft.quoting, Quoting::All, Quoting::All.label());
+                    for q in Quoting::ALL {
+                        ui.selectable_value(&mut draft.quoting, q, q.label());
+                    }
                 });
                 ui.end_row();
             });
