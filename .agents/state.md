@@ -4,7 +4,8 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master` (no rem
 
 ## Now
 
-- **CSV editor — plan implemented, awaiting owner review** (`.agents/plans/csv-editor.md`,
+- **CSV editor — plan implemented, accepted by the owner 2026-10-21 ("good enough")**
+  (`.agents/plans/csv-editor.md`,
   approved 2026-10-21). Slices 1–8 landed 2026-10-21: Cargo workspace (`crates/table`, `crates/ui`,
   `apps/csv-editor`), eframe shell with the Windows graphics probe, table model with CSV
   sniff/parse/write, inverse-edit undo, document open/save, selection model, and the read-only
@@ -32,8 +33,10 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master` (no rem
   happens on mouse down with that press's modifiers (Ctrl released before the button no longer
   drops the added range); inserts land at every selected run. Round 2: per-cell quote
   preservation (`Cell { text, quoted }`), quoting mode "As in the file" as the default.
-  Next action: the owner re-tests (`cargo run --release -p csv-editor -- <file.csv>`) and reports
-  the next round; follow-ups are listed at the end of the plan.
+  The owner re-tested the release build on a real 7,294-row file after round 2 and accepted it.
+  Next action: none pending; new findings or the follow-ups listed at the end of the plan
+  (memory: parse from bytes; multi-column sort; column drag reorder; marquee; installer) start
+  a new slice on the owner's go.
 
 ## Facts
 
