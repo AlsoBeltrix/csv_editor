@@ -17,6 +17,8 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "
 egui = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 # PNG encoding for the CSV_EDITOR_SCREENSHOT development aid.
 image = { version = "0.25", default-features = false, features = ["png"] }
 

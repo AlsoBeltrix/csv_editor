@@ -28,6 +28,9 @@ egui = { version = "0.37", features = ["default_fonts"] }
 eframe = { version = "0.37", default-features = false }
 egui_kittest = "0.37"
 rfd = "0.17"
+# Font parser egui's epaint uses; the UI validates system font files with it before handing them
+# to egui, which panics on a file it cannot parse. Same version as epaint's, so no second copy.
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

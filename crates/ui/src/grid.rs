@@ -40,6 +40,8 @@ pub struct GridState {
     pub goto_request: bool,
     /// A short result to show in the status bar ("3 rows removed"), picked up by the app.
     pub note: Option<String>,
+    /// Where the last right-click landed, deciding which context menu opens.
+    pub context_zone: Zone,
     /// The last copied or cut block, kept as cells so a paste within the editor is exact.
     pub clip: Option<Clip>,
     /// Reads the system clipboard, for the menu's Paste (Ctrl+V arrives as an egui event).
@@ -47,6 +49,15 @@ pub struct GridState {
     drag: Option<Drag>,
     /// Wheel movement not yet turned into whole rows and columns.
     wheel: Vec2,
+}
+
+/// A part of the grid.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Zone {
+    #[default]
+    Cells,
+    Gutter,
+    Head,
 }
 
 /// A copied or cut block.
@@ -96,6 +107,7 @@ impl Default for GridState {
             dialect_request: false,
             goto_request: false,
             note: None,
+            context_zone: Zone::Cells,
         }
     }
 }
@@ -305,7 +317,11 @@ pub fn show(app: &mut EditorApp, ui: &mut egui::Ui, t: &Tokens) {
     horizontal_scrollbar(grid, view, ui, htrack, &geo, t);
     ui.painter().rect_filled(Rect::from_min_max(pos2(rect.right(), rect.bottom()), full.max), 0.0, t.tab_bar);
     editor_ui(grid, view, ui, &resp, &geo, t);
-    resp.context_menu(|ui| crate::ops::context_menu(grid, view, ui));
+    resp.context_menu(|ui| match grid.context_zone {
+        Zone::Cells => crate::ops::context_menu(grid, view, ui),
+        Zone::Gutter => crate::ops::rows_menu(grid, view, ui),
+        Zone::Head => crate::ops::header_context_menu(grid, view, ui),
+    });
 }
 
 /// The in-cell editor: key handling first (Enter, Tab, Escape and, in replace mode, arrows act
@@ -582,12 +598,34 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
         commit_edit(grid, view);
         resp.request_focus();
         let dragging = resp.drag_started();
-        // A right-click on a cell outside the selection selects it; inside, it keeps the selection.
+        // A right-click outside the selection selects what is under it (cell, row or column);
+        // inside, it keeps the selection. Where it landed decides the context menu.
         if resp.secondary_clicked() {
-            if let Some(c) = geo.cell_at(p)
-                && !view.sel.contains(clamp(c))
-            {
-                view.sel = Selection::at(clamp(c));
+            if in_head(p) {
+                grid.context_zone = Zone::Head;
+                if let Some(c) = geo.col_at(p.x) {
+                    let c = c.min(max.col);
+                    if !view.sel.ranges.iter().any(|r| r.cols().contains(&c) && r.start.row <= body_start && r.end.row >= max.row) {
+                        let top = CellRef::new(body_start, c);
+                        view.sel = Selection { active: top, anchor: top, ranges: vec![Range::new(top, CellRef::new(max.row, c))] };
+                    }
+                }
+            } else if in_gutter(p) {
+                grid.context_zone = Zone::Gutter;
+                if let Some(r) = geo.row_at(p.y) {
+                    let r = r.clamp(body_start, max.row);
+                    if !view.sel.ranges.iter().any(|g| g.rows().contains(&r) && g.start.col == 0 && g.end.col >= max.col) {
+                        let left = CellRef::new(r, 0);
+                        view.sel = Selection { active: left, anchor: left, ranges: vec![Range::new(left, CellRef::new(r, max.col))] };
+                    }
+                }
+            } else {
+                grid.context_zone = Zone::Cells;
+                if let Some(c) = geo.cell_at(p)
+                    && !view.sel.contains(clamp(c))
+                {
+                    view.sel = Selection::at(clamp(c));
+                }
             }
             return;
         }

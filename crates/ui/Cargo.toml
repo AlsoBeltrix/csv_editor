@@ -13,6 +13,7 @@ workspace = true
 csv-editor-table = { workspace = true }
 egui = { workspace = true }
 log = { workspace = true }
+skrifa = { workspace = true }
 
 [dev-dependencies]
 egui_kittest = { workspace = true }

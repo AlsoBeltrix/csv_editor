@@ -1,10 +1,11 @@
 # Plan: CSV editor (lean standalone app)
 
 Status: **approved 2026-10-21** (owner chose "lean standalone app" over wrapping GridCraft's UI).
-Implementation: in progress on `master`, slice by slice. Each slice is one or more commits that
-pass the verification entry point before landing.
+Implementation: **all eight slices landed on `master` 2026-10-21**; each passed the verification
+entry point before landing. Remaining: the owner's hands-on review of the running app, and the
+follow-ups listed at the end.
 
-Progress: slices 1–7 landed 2026-10-21. Verified on this machine: build, tests, clippy, fmt, and a
+Progress: slices 1–8 landed 2026-10-21. Verified on this machine: build, tests, clippy, fmt, and a
 headless screenshot (`CSV_EDITOR_SCREENSHOT=<png>` saves the window after a few frames and quits)
 showing a 400-row sample with header names, leading zeros kept and numbers right-aligned.
 Slice 4 added headless interface tests (`crates/ui/tests/editing.rs`, egui_kittest) that type,
@@ -14,8 +15,14 @@ case, whole cell, regex; scope everywhere/selection/column), sorting by column (
 numeric, header-aware, one undo step) and per-column row filters as a view the grid scrolls
 through. Slice 7 added the cleanup tools (trim, change case, remove empty rows/columns, remove
 duplicate rows; selection-scoped where that makes sense), the delimiter-and-encoding dialog (a
-changed dialect dirties the document) and Go to row (Ctrl+G). Next: slice 8 (polish: prefs,
-recent files, large-file soak, shortcut audit, about).
+changed dialect dirties the document) and Go to row (Ctrl+G). Slice 8 added persisted
+preferences (theme, zoom, recent files, window size in `%APPDATA%\csv-editor\prefs.json`), an
+Open Recent menu, system font fallbacks (Segoe UI plus symbol and CJK faces, validated before
+egui sees them), zone-aware right-click menus (cells, row gutter, column header), a Help menu
+with the shortcut list and About, and an open-time log line.
+
+Large-file soak (debug profile, this machine): a 100.3 MB, 1,357,661-row × 8-column file opened
+in 1.15 s with a peak working set of 831 MB.
 
 ## Goal
 
@@ -130,6 +137,13 @@ UI behaviour that can be tested headlessly uses `egui_kittest` (as GridCraft doe
 
 - None. Direct-to-`master` slices and the verification entry point above were stated as
   assumptions in the approved proposal.
+
+## Follow-ups (not started)
+
+- Memory: parsing decodes the whole file into a `String` before splitting it; a UTF-8 file could
+  be parsed straight from its bytes to cut the peak by about the file size.
+- Multi-column sort, per-cell quote preservation, column drag-reordering with the mouse, a dashed
+  marquee on the cut/copy source, a Windows installer and file association.
 
 ## Out of scope (v1)
 

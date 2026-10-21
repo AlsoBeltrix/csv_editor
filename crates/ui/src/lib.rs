@@ -2,6 +2,7 @@
 //! `csv_editor_table`: this crate holds interface state and drawing, the table crate holds the data.
 
 pub mod find;
+pub mod fonts;
 pub mod grid;
 pub mod ops;
 pub mod theme;
@@ -61,8 +62,16 @@ pub struct EditorApp {
     goto: Option<String>,
     /// A short result shown in the status bar until this time (seconds).
     note: Option<(String, f64)>,
+    /// Recently opened or saved files, most recent first. The shell persists it.
+    pub recent: Vec<PathBuf>,
+    shortcuts_open: bool,
+    about_open: bool,
+    fonts_installed: bool,
     title: String,
 }
+
+/// How many recent files the File menu remembers.
+pub const RECENT_LIMIT: usize = 12;
 
 impl EditorApp {
     pub fn new(services: Services) -> Self {
@@ -85,6 +94,10 @@ impl EditorApp {
             dialect_dialog: None,
             goto: None,
             note: None,
+            recent: Vec::new(),
+            shortcuts_open: false,
+            about_open: false,
+            fonts_installed: false,
             title: String::new(),
         }
     }
@@ -104,16 +117,26 @@ impl EditorApp {
             self.active = i;
             return;
         }
+        let started = std::time::Instant::now();
         match Document::open(path, &ParseOptions::default()) {
             Ok(doc) => {
+                log::info!("opened {} ({} rows × {} columns) in {:.2?}", path.display(), doc.table.row_count(), doc.table.width(), started.elapsed());
                 if self.docs.len() == 1 && self.docs.first().is_some_and(DocView::is_blank) {
                     self.docs.clear();
                 }
                 self.docs.push(DocView::new(doc));
                 self.active = self.docs.len() - 1;
+                self.remember(path);
             }
             Err(e) => self.message = Some(("Can't open file".to_string(), e.to_string())),
         }
+    }
+
+    /// Puts the file at the top of the recent list.
+    fn remember(&mut self, path: &Path) {
+        self.recent.retain(|p| p != path);
+        self.recent.insert(0, path.to_path_buf());
+        self.recent.truncate(RECENT_LIMIT);
     }
 
     pub fn new_document(&mut self) {
@@ -176,10 +199,14 @@ impl EditorApp {
 
     fn write_to(&mut self, index: usize, path: &Path) -> bool {
         let Some(view) = self.docs.get_mut(index) else { return false };
-        match view.doc.save_to(path) {
+        let encoding = view.doc.dialect.encoding.label();
+        let result = view.doc.save_to(path);
+        if result.is_ok() {
+            self.remember(path);
+        }
+        match result {
             Ok(0) => true,
             Ok(lost) => {
-                let encoding = view.doc.dialect.encoding.label();
                 self.message = Some((
                     "Saved with substitutions".to_string(),
                     format!("{lost} character(s) cannot be represented in {encoding} and were written as '?'. Save the file as UTF-8 to keep them."),
@@ -200,6 +227,10 @@ impl EditorApp {
     /// Per-frame state updates that are not drawing: theme, window title, global shortcuts,
     /// the quit guard.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        if !self.fonts_installed {
+            fonts::install(ctx);
+            self.fonts_installed = true;
+        }
         let dark = self.wants_dark(ctx);
         if self.theme_applied != Some(dark) {
             theme::apply(ctx, dark);
@@ -237,7 +268,9 @@ impl EditorApp {
             || self.rename.is_some()
             || self.filter_dialog.is_some()
             || self.dialect_dialog.is_some()
-            || self.goto.is_some();
+            || self.goto.is_some()
+            || self.shortcuts_open
+            || self.about_open;
         if !dialog_open && ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::G)) {
             self.goto = Some(String::new());
         }
@@ -345,6 +378,7 @@ impl EditorApp {
         self.filter_dialog(ui.ctx());
         self.dialect_dialog(ui.ctx());
         self.goto_dialog(ui.ctx());
+        self.help_dialogs(ui.ctx());
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, t: &Tokens) {
@@ -358,6 +392,26 @@ impl EditorApp {
                     ui.close();
                     self.open_dialog();
                 }
+                ui.add_enabled_ui(!self.recent.is_empty(), |ui| {
+                    ui.menu_button("Open recent", |ui| {
+                        let mut open = None;
+                        for p in &self.recent {
+                            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string());
+                            if ui.button(name).on_hover_text(p.display().to_string()).clicked() {
+                                open = Some(p.clone());
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Clear list").clicked() {
+                            self.recent.clear();
+                            ui.close();
+                        }
+                        if let Some(p) = open {
+                            ui.close();
+                            self.open_path(&p);
+                        }
+                    });
+                });
                 ui.separator();
                 if ui.add(egui::Button::new("Save").shortcut_text("Ctrl+S")).clicked() {
                     ui.close();
@@ -416,6 +470,16 @@ impl EditorApp {
                         ui.close();
                     }
                 });
+            });
+            ui.menu_button("Help", |ui| {
+                if ui.button("Keyboard shortcuts").clicked() {
+                    self.shortcuts_open = true;
+                    ui.close();
+                }
+                if ui.button("About CSV Editor").clicked() {
+                    self.about_open = true;
+                    ui.close();
+                }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(view) = self.active_view() {
@@ -847,4 +911,88 @@ impl EditorApp {
             None => self.goto = Some(text),
         }
     }
+
+    fn help_dialogs(&mut self, ctx: &egui::Context) {
+        if self.shortcuts_open {
+            let response = egui::Modal::new(Id::unique("shortcuts")).show(ctx, |ui| {
+                ui.set_width(460.0);
+                ui.heading("Keyboard shortcuts");
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+                    egui::Grid::new("shortcuts-grid").num_columns(2).spacing([16.0, 4.0]).striped(true).show(ui, |ui| {
+                        for (keys, what) in SHORTCUTS {
+                            if keys.is_empty() {
+                                ui.label(egui::RichText::new(*what).strong());
+                                ui.label("");
+                            } else {
+                                ui.label(egui::RichText::new(*keys).monospace());
+                                ui.label(*what);
+                            }
+                            ui.end_row();
+                        }
+                    });
+                });
+                ui.add_space(10.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Close").clicked() || ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Enter)) {
+                        self.shortcuts_open = false;
+                    }
+                });
+            });
+            if response.should_close() {
+                self.shortcuts_open = false;
+            }
+        }
+        if self.about_open {
+            let response = egui::Modal::new(Id::unique("about")).show(ctx, |ui| {
+                ui.set_width(380.0);
+                ui.heading(format!("CSV Editor {}", env!("CARGO_PKG_VERSION")));
+                ui.add_space(6.0);
+                ui.label("A streamlined, spreadsheet-style editor for delimited text files. Every cell is text, and untouched files round-trip unchanged.");
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Built with egui and eframe. Includes code adapted from GridCraft (MIT), listed in ATTRIBUTION.md and THIRD_PARTY_NOTICES.md.").weak());
+                ui.add_space(10.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Close").clicked() || ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Enter)) {
+                        self.about_open = false;
+                    }
+                });
+            });
+            if response.should_close() {
+                self.about_open = false;
+            }
+        }
+    }
 }
+
+/// The shortcut list shown in Help. Empty keys start a section.
+const SHORTCUTS: &[(&str, &str)] = &[
+    ("", "Files"),
+    ("Ctrl+N / Ctrl+O", "New document / Open files"),
+    ("Ctrl+S / Ctrl+Shift+S", "Save / Save as"),
+    ("Ctrl+W", "Close the document"),
+    ("", "Moving around"),
+    ("Arrows, Page Up/Down", "Move the active cell (Shift extends the selection)"),
+    ("Ctrl+Arrows", "Jump to the edge of the data"),
+    ("Home / End", "First column / last filled column of the row"),
+    ("Ctrl+Home / Ctrl+End", "First cell / last cell of the data"),
+    ("Tab, Enter", "Move right / down (Shift reverses; inside a selection they cycle)"),
+    ("Ctrl+A", "Select the data block, then everything"),
+    ("Ctrl+G", "Go to a row"),
+    ("Ctrl+F / Ctrl+H", "Find / Find and replace"),
+    ("Esc", "Cancel editing, close the find bar, collapse the selection"),
+    ("", "Editing"),
+    ("Type", "Replace the cell's text (arrows then commit and move)"),
+    ("F2, double-click", "Edit the cell's text in place"),
+    ("Alt+Enter", "Line break inside a cell"),
+    ("Delete, Backspace", "Clear the selected cells"),
+    ("Ctrl+D", "Fill the selection down from its first row"),
+    ("Ctrl+Z / Ctrl+Y", "Undo / Redo"),
+    ("Ctrl+X / Ctrl+C / Ctrl+V", "Cut / Copy / Paste (tab-separated text)"),
+    ("Alt+Up / Alt+Down", "Move the selected rows"),
+    ("Alt+Left / Alt+Right", "Move the selected columns"),
+    ("", "View"),
+    ("Ctrl+Wheel, Ctrl++ / Ctrl+- / Ctrl+0", "Zoom in / out / reset"),
+    ("Double-click a column edge", "Fit the column to its contents"),
+    ("Right-click", "Context menu for cells, rows (gutter) or columns (header)"),
+];

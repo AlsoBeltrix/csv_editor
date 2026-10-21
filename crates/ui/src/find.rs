@@ -174,10 +174,10 @@ impl FindBar {
                     self.scope = Some(Scope::Column);
                 }
             });
-            if ui.button("◀").on_hover_text("Previous (Shift+Enter)").clicked() {
+            if ui.button("Previous").on_hover_text("Shift+Enter").clicked() {
                 self.next(grid, view, false);
             }
-            if ui.button("▶").on_hover_text("Next (Enter)").clicked() {
+            if ui.button("Next").on_hover_text("Enter").clicked() {
                 self.next(grid, view, true);
             }
             let count = self.count(view);
@@ -193,7 +193,7 @@ impl FindBar {
                 ui.colored_label(t.text_dim, summary);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("✕").on_hover_text("Close (Esc)").clicked() {
+                if ui.button("Close").on_hover_text("Esc").clicked() {
                     self.close();
                 }
                 let label = if self.replace { "Hide replace" } else { "Replace…" };

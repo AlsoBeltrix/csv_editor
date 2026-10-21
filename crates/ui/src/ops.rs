@@ -456,6 +456,14 @@ pub fn data_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
     }
 }
 
+/// The column header's right-click menu: column structure, then sort and filter.
+pub fn header_context_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
+    ui.set_min_width(220.0);
+    cols_menu(grid, view, ui);
+    ui.separator();
+    data_menu(grid, view, ui);
+}
+
 /// The grid's right-click menu.
 pub fn context_menu(grid: &mut GridState, view: &mut DocView, ui: &mut Ui) {
     ui.set_min_width(220.0);
