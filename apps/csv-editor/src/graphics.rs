@@ -9,10 +9,12 @@
 //! DirectX 12 shaders are compiled with FXC (`d3dcompiler_47.dll`, part of Windows), never with
 //! whichever `dxcompiler.dll` the DLL search path happens to find: see [`dx12_compiler`].
 
+use std::sync::Arc;
+
 use eframe::{
     NativeOptions,
     egui_wgpu::WgpuSetup,
-    wgpu::{Backends, DeviceType, Dx12Compiler},
+    wgpu::{Backends, DeviceDescriptor, DeviceType, Dx12Compiler, MemoryHints},
 };
 
 /// What the start-up probe learned about one DirectX 12 adapter.
@@ -63,13 +65,23 @@ pub fn dx12_compiler(env_choice: Option<Dx12Compiler>) -> Dx12Compiler {
     env_choice.unwrap_or(Dx12Compiler::Fxc)
 }
 
-/// Restricts the wgpu instance eframe creates to `backends`, and pins its DirectX 12 shader
-/// compiler ([`dx12_compiler`]).
+/// Restricts the wgpu instance eframe creates to `backends`, pins its DirectX 12 shader
+/// compiler ([`dx12_compiler`]) and asks the device for small memory blocks ([`lean_memory`]).
 pub fn configure_backends(options: &mut NativeOptions, backends: Backends) {
     if let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
         create.instance_descriptor.backend_options.dx12.shader_compiler = dx12_compiler(Dx12Compiler::from_env());
         create.instance_descriptor.backends = backends;
+        let base = Arc::clone(&create.device_descriptor);
+        create.device_descriptor = Arc::new(move |adapter| lean_memory(base(adapter)));
     }
+}
+
+/// The device descriptor with wgpu's memory-usage hint. wgpu's default (`Performance`) carves
+/// GPU memory in 128–256 MB blocks and host-visible memory in 64–128 MB blocks, and on an
+/// integrated GPU those heaps are this process's own memory: about 290 MB before a single cell
+/// is drawn. `MemoryUsage` starts at 8 MB and 4 MB. A grid of text never fills either.
+pub fn lean_memory(desc: DeviceDescriptor<'static>) -> DeviceDescriptor<'static> {
+    DeviceDescriptor { memory_hints: MemoryHints::MemoryUsage, ..desc }
 }
 
 /// Chooses the backends ([`choose_backends`]), applies them to `options` and returns them.
@@ -128,6 +140,13 @@ mod tests {
             panic!("default native options must create a wgpu instance");
         };
         create.instance_descriptor.backends
+    }
+
+    #[test]
+    fn devices_are_asked_for_small_memory_blocks() {
+        let desc = lean_memory(DeviceDescriptor::default());
+        assert!(matches!(desc.memory_hints, MemoryHints::MemoryUsage));
+        assert!(matches!(DeviceDescriptor::default().memory_hints, MemoryHints::Performance), "wgpu's default moved; re-measure");
     }
 
     const fn adapter(device_type: DeviceType, meets_limits: bool) -> Dx12Adapter {

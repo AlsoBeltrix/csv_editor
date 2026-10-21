@@ -24,7 +24,8 @@ with the shortcut list and About, and an open-time log line.
 Large-file soak (this machine, Intel integrated GPU): a 100.3 MB, 1,357,661-row × 8-column file
 opened in 0.70 s (release) / 1.15 s (dev profile) with a peak working set of 702 MB / 831 MB. The
 release executable is 16.3 MB. After the per-cell quote flag (cells 24 → 32 bytes): 0.58 s and
-765 MB in release.
+765 MB in release. After slice 9 (measured with a poller of the peak working set, which reads
+higher than the earlier method): 0.42 s open, 0.20 s save, 607 MB peak; see slice 9.
 
 ## Goal
 
@@ -172,10 +173,43 @@ aggregate policy). Fixed by the per-cell `quoted` flag described under Table mod
 files now round-trip byte for byte, edits follow the minimal rule, and the dialect dialog offers
 "As in the file", "Only when needed" and "Every field".
 
+## Slice 9: performance (owner go 2026-10-21, "keep optimizing")
+
+Baseline on the 100.3 MB soak file (`crates/table/examples/soak.rs` with an outside poller of the
+peak working set; release): open 0.52 s, save 0.40 s, peak 588 MB for open-then-save in the
+example and 837 MB in the app. Where the memory goes: cells 348 MB (10.9 M × 32 bytes) + row
+vectors 33 MB are the table itself; the rest of the peak is the file bytes plus a decoded copy on
+open, and the text plus an encoded copy on save (about 2 × the file size each).
+
+Changes:
+- `decode` returns `Cow<str>`: a UTF-8 file (the common case) is parsed straight from its bytes.
+- The record splitter scans with slice searches and sizes each row's vector from the previous
+  row (one exact allocation per row).
+- Saving streams row by row through a `BufWriter` to the temporary file (`io::write_to`); the
+  in-memory `write` is kept for tests and the clipboard. Field quoting checks bytes first.
+- The soak example doubles as a round-trip check (saved bytes equal the file).
+- The wgpu device is created with `MemoryHints::MemoryUsage` (`graphics::lean_memory`). Measured
+  by backend: with a 20 KB file the app's private memory was 377 MB on DirectX 12 and 45 MB on
+  OpenGL. The difference is wgpu's default memory hint (`Performance`): its allocator carves GPU
+  memory in 128–256 MB blocks and host-visible memory in 64–128 MB blocks, and on an integrated
+  GPU those heaps are the process's own memory. `MemoryUsage` starts at 8 MB and 4 MB.
+
+Results (same file and method): open 0.42 s, save 0.20 s; soak example peak 488 MB (the table,
+381 MB, plus the file bytes while parsing); app peak 607 MB, and 200 MB with the 20 KB file
+(was 443 MB). What remains in the app's baseline: 48 MB of system font files (four CJK and
+symbol faces egui keeps in memory) and about 150 MB of DirectX 12 driver and runtime.
+
+Not done: shrinking `Cell` from 32 to 24 bytes (the `quoted` flag pads the 24-byte
+`CompactString`). It would cut the table by about 87 MB on this file but means replacing
+`Row = Vec<Cell>` with a struct carrying a bit set, touching every row operation. Listed below.
+
 ## Follow-ups (not started)
 
-- Memory: parsing decodes the whole file into a `String` before splitting it; a UTF-8 file could
-  be parsed straight from its bytes to cut the peak by about the file size.
+- Memory: `Cell` is 32 bytes because of the `quoted` flag; a `Row` struct with a per-row bit set
+  would bring cells back to 24 bytes (about a quarter of the table).
+- Parse in parallel (split at record boundaries outside quotes) for files past a few hundred MB.
+- Fonts: the CJK fallback faces cost 48 MB whether or not the data needs them; loading them on
+  the first missing glyph would need a font-fallback hook egui does not have yet.
 - Multi-column sort, column drag-reordering with the mouse, a dashed
   marquee on the cut/copy source, a Windows installer and file association.
 

@@ -33,10 +33,13 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master` (no rem
   happens on mouse down with that press's modifiers (Ctrl released before the button no longer
   drops the added range); inserts land at every selected run. Round 2: per-cell quote
   preservation (`Cell { text, quoted }`), quoting mode "As in the file" as the default.
-  The owner re-tested the release build on a real 7,294-row file after round 2 and accepted it.
-  Next action: none pending; new findings or the follow-ups listed at the end of the plan
-  (memory: parse from bytes; multi-column sort; column drag reorder; marquee; installer) start
-  a new slice on the owner's go.
+  The owner re-tested the release build on a real 7,294-row file after round 2 and accepted it,
+  then asked to "keep optimizing" (2026-10-21): slice 9 (performance) landed — UTF-8 parsed from
+  the file bytes without a decoded copy, saves streamed row by row, wgpu device created with the
+  memory-usage hint (DirectX 12 heaps on an integrated GPU were 290 MB of the process). 100 MB
+  soak: open 0.42 s, save 0.20 s, app peak 607 MB (was 837), 200 MB with a tiny file (was 443).
+  Next action: owner re-tests; further optimization candidates are the follow-ups at the end of
+  the plan (24-byte cells via a `Row` struct, parallel parse, lazy CJK fonts).
 
 ## Facts
 
@@ -51,6 +54,9 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master` (no rem
   enables it, otherwise text panics in tests of the UI crate alone.
 - Widgets that must not take keyboard focus (scrollbars) use `Sense::CLICK | Sense::DRAG`, not
   `Sense::click_and_drag()` (which is focusable and catches egui's arrow-key focus moves).
+- Measuring memory: `crates/table/examples/soak.rs` opens, saves and compares a file; peak
+  working set and private bytes come from a PowerShell poller around the process (the script is
+  in the session scratchpad; it is ten lines of `Process.Refresh()` in a loop).
 - Looking at the UI without a person: `='<path>.png'` then run the exe
   with a file argument; it saves the window after four frames and exits. Sample data for this
   lives in the session scratchpad, not the repo.
