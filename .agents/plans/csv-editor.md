@@ -23,7 +23,8 @@ with the shortcut list and About, and an open-time log line.
 
 Large-file soak (this machine, Intel integrated GPU): a 100.3 MB, 1,357,661-row × 8-column file
 opened in 0.70 s (release) / 1.15 s (dev profile) with a peak working set of 702 MB / 831 MB. The
-release executable is 16.3 MB.
+release executable is 16.3 MB. After the per-cell quote flag (cells 24 → 32 bytes): 0.58 s and
+765 MB in release.
 
 ## Goal
 
