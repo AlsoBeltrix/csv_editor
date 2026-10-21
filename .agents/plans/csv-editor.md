@@ -4,9 +4,10 @@ Status: **approved 2026-10-21** (owner chose "lean standalone app" over wrapping
 Implementation: in progress on `master`, slice by slice. Each slice is one or more commits that
 pass the verification entry point before landing.
 
-Progress: slices 1 and 2 landed 2026-10-21 (plus the selection model from slice 3). Verified on
-this machine: build, 32 tests, clippy, fmt; the app starts on DirectX 12 (Intel integrated GPU).
-Next: slice 3 (grid).
+Progress: slices 1–3 landed 2026-10-21. Verified on this machine: build, tests, clippy, fmt, and a
+headless screenshot (`CSV_EDITOR_SCREENSHOT=<png>` saves the window after a few frames and quits)
+showing a 400-row sample with header names, leading zeros kept and numbers right-aligned.
+Next: slice 4 (editing, undo, save).
 
 ## Goal
 
