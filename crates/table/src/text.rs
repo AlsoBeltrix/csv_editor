@@ -3,6 +3,8 @@
 //! `decode` and `sniff_delimiter` are adapted from GridCraft's `crates/xlsx/src/csv.rs` (MIT, see
 //! `ATTRIBUTION.md`).
 
+use std::borrow::Cow;
+
 use crate::dialect::{Encoding, LineEnding};
 
 /// Windows-1252 code points for bytes 0x80–0x9F (others map to Latin-1).
@@ -14,10 +16,11 @@ const CP1252: [u32; 32] = [
 /// How far the sniffers read.
 const SNIFF_BYTES: usize = 64 * 1024;
 
-/// Decodes file bytes: UTF-8/UTF-16 BOMs, else UTF-8, else Windows-1252. Never fails.
-pub fn decode(bytes: &[u8]) -> (String, Encoding) {
+/// Decodes file bytes: UTF-8/UTF-16 BOMs, else UTF-8, else Windows-1252. Never fails. Valid
+/// UTF-8 is borrowed, not copied: a large file is parsed straight from its bytes.
+pub fn decode(bytes: &[u8]) -> (Cow<'_, str>, Encoding) {
     if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
-        return (String::from_utf8_lossy(rest).into_owned(), Encoding::Utf8Bom);
+        return (String::from_utf8_lossy(rest), Encoding::Utf8Bom);
     }
     let utf16 = |b: &[u8], le: bool| -> String {
         let (pairs, _odd_byte) = b.as_chunks::<2>();
@@ -25,14 +28,14 @@ pub fn decode(bytes: &[u8]) -> (String, Encoding) {
         char::decode_utf16(units).map(|r| r.unwrap_or('\u{FFFD}')).collect()
     };
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
-        return (utf16(rest, true), Encoding::Utf16Le);
+        return (Cow::Owned(utf16(rest, true)), Encoding::Utf16Le);
     }
     if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
-        return (utf16(rest, false), Encoding::Utf16Be);
+        return (Cow::Owned(utf16(rest, false)), Encoding::Utf16Be);
     }
     match std::str::from_utf8(bytes) {
-        Ok(s) => (s.to_string(), Encoding::Utf8),
-        Err(_) => (bytes.iter().map(|&b| cp1252_char(b)).collect(), Encoding::Windows1252),
+        Ok(s) => (Cow::Borrowed(s), Encoding::Utf8),
+        Err(_) => (Cow::Owned(bytes.iter().map(|&b| cp1252_char(b)).collect()), Encoding::Windows1252),
     }
 }
 
@@ -51,38 +54,50 @@ fn cp1252_byte(c: char) -> Option<u8> {
     CP1252.iter().position(|&p| p == u).and_then(|i| u8::try_from(0x80 + i).ok())
 }
 
-/// Encodes text for saving. The second value counts characters the encoding cannot represent
-/// (written as `?`); it is only ever non-zero for Windows-1252.
-pub fn encode(text: &str, encoding: Encoding) -> (Vec<u8>, usize) {
+/// The byte-order mark the encoding starts a file with (empty for most).
+pub fn bom(encoding: Encoding) -> &'static [u8] {
     match encoding {
-        Encoding::Utf8 => (text.as_bytes().to_vec(), 0),
-        Encoding::Utf8Bom => {
-            let mut v = Vec::with_capacity(text.len() + 3);
-            v.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
-            v.extend_from_slice(text.as_bytes());
-            (v, 0)
+        Encoding::Utf8 | Encoding::Windows1252 => &[],
+        Encoding::Utf8Bom => &[0xEF, 0xBB, 0xBF],
+        Encoding::Utf16Le => &[0xFF, 0xFE],
+        Encoding::Utf16Be => &[0xFE, 0xFF],
+    }
+}
+
+/// Encodes text for saving: the BOM, then the body. The second value counts characters the
+/// encoding cannot represent (written as `?`); it is only ever non-zero for Windows-1252.
+pub fn encode(text: &str, encoding: Encoding) -> (Vec<u8>, usize) {
+    let mut out = Vec::with_capacity(text.len() + 3);
+    out.extend_from_slice(bom(encoding));
+    let lossy = encode_into(text, encoding, &mut out);
+    (out, lossy)
+}
+
+/// Appends the encoded text (no BOM) to `out`; see [`encode`] for the count returned.
+pub fn encode_into(text: &str, encoding: Encoding, out: &mut Vec<u8>) -> usize {
+    match encoding {
+        Encoding::Utf8 | Encoding::Utf8Bom => {
+            out.extend_from_slice(text.as_bytes());
+            0
         }
         Encoding::Utf16Le | Encoding::Utf16Be => {
             let le = encoding == Encoding::Utf16Le;
-            let mut v = Vec::with_capacity(text.len() * 2 + 2);
-            v.extend_from_slice(if le { &[0xFF, 0xFE] } else { &[0xFE, 0xFF] });
+            out.reserve(text.len() * 2);
             for u in text.encode_utf16() {
-                v.extend_from_slice(&if le { u.to_le_bytes() } else { u.to_be_bytes() });
+                out.extend_from_slice(&if le { u.to_le_bytes() } else { u.to_be_bytes() });
             }
-            (v, 0)
+            0
         }
         Encoding::Windows1252 => {
             let mut lossy = 0usize;
-            let v = text
-                .chars()
-                .map(|c| {
-                    cp1252_byte(c).unwrap_or_else(|| {
-                        lossy += 1;
-                        b'?'
-                    })
-                })
-                .collect();
-            (v, lossy)
+            out.reserve(text.len());
+            for c in text.chars() {
+                out.push(cp1252_byte(c).unwrap_or_else(|| {
+                    lossy += 1;
+                    b'?'
+                }));
+            }
+            lossy
         }
     }
 }
@@ -165,14 +180,26 @@ pub fn sniff_line_ending(text: &str) -> LineEnding {
 mod tests {
     use super::*;
 
+    fn decoded(bytes: &[u8]) -> (String, Encoding) {
+        let (text, enc) = decode(bytes);
+        (text.into_owned(), enc)
+    }
+
     #[test]
     fn decodes_boms_and_fallbacks() {
-        assert_eq!(decode(b"\xEF\xBB\xBFa,b"), ("a,b".to_string(), Encoding::Utf8Bom));
-        assert_eq!(decode(b"\xFF\xFEa\0,\0"), ("a,".to_string(), Encoding::Utf16Le));
-        assert_eq!(decode(b"\xFE\xFF\0a\0,"), ("a,".to_string(), Encoding::Utf16Be));
-        assert_eq!(decode("héllo".as_bytes()), ("héllo".to_string(), Encoding::Utf8));
+        assert_eq!(decoded(b"\xEF\xBB\xBFa,b"), ("a,b".to_string(), Encoding::Utf8Bom));
+        assert_eq!(decoded(b"\xFF\xFEa\0,\0"), ("a,".to_string(), Encoding::Utf16Le));
+        assert_eq!(decoded(b"\xFE\xFF\0a\0,"), ("a,".to_string(), Encoding::Utf16Be));
+        assert_eq!(decoded("héllo".as_bytes()), ("héllo".to_string(), Encoding::Utf8));
         // Latin-1 é and the Windows-1252 euro sign.
-        assert_eq!(decode(b"h\xE9llo \x80"), ("héllo €".to_string(), Encoding::Windows1252));
+        assert_eq!(decoded(b"h\xE9llo \x80"), ("héllo €".to_string(), Encoding::Windows1252));
+    }
+
+    #[test]
+    fn valid_utf8_is_borrowed_not_copied() {
+        assert!(matches!(decode(b"a,b\n").0, Cow::Borrowed(_)));
+        assert!(matches!(decode(b"\xEF\xBB\xBFa,b\n").0, Cow::Borrowed(_)));
+        assert!(matches!(decode(b"caf\xE9").0, Cow::Owned(_)));
     }
 
     #[test]
@@ -181,7 +208,7 @@ mod tests {
             let text = if enc == Encoding::Windows1252 { "héllo € “quoted”" } else { "héllo € 日本" };
             let (bytes, lossy) = encode(text, enc);
             assert_eq!(lossy, 0, "{enc:?}");
-            assert_eq!(decode(&bytes), (text.to_string(), enc), "{enc:?}");
+            assert_eq!(decoded(&bytes), (text.to_string(), enc), "{enc:?}");
         }
         let (bytes, lossy) = encode("日本", Encoding::Windows1252);
         assert_eq!((bytes, lossy), (b"??".to_vec(), 2));

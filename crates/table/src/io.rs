@@ -5,9 +5,11 @@
 //! accepted). It works on bytes: the delimiter, quote and line-break characters are ASCII, so
 //! field boundaries always fall on character boundaries of the decoded UTF-8 text.
 
-use crate::dialect::{Dialect, Quoting};
+use std::io::Write;
+
+use crate::dialect::{Dialect, Encoding, Quoting};
 use crate::table::{Cell, Row, Table};
-use crate::text::{decode, encode, sniff_delimiter, sniff_line_ending};
+use crate::text::{bom, decode, encode_into, sniff_delimiter, sniff_line_ending};
 
 /// The largest file opened (bytes). Above this the open is refused before anything is allocated.
 pub const MAX_INPUT_BYTES: usize = 2 << 30;
@@ -73,6 +75,17 @@ pub(crate) fn parse_records(text: &str, delim: u8, quote: u8, mut on_record: imp
     let mut i = 0usize;
     let mut record: Row = Vec::new();
     let is_break = |c: u8| c == delim || c == b'\r' || c == b'\n';
+    // The index of the first byte at or after `from` matching `stop` (or the end).
+    let scan = |from: usize, stop: &dyn Fn(u8) -> bool| -> usize {
+        let rest = b.get(from..).unwrap_or(&[]);
+        from + rest.iter().position(|&c| stop(c)).unwrap_or(rest.len())
+    };
+    // Hands the record over; the next one gets the same capacity (rows are usually alike).
+    let mut emit = |record: &mut Row, stats: &mut ParseStats, ended: bool| {
+        let len = record.len();
+        on_record(std::mem::replace(record, Vec::with_capacity(len)));
+        stats.ended_with_terminator = ended;
+    };
     while i < n {
         // One field.
         let quoted = b.get(i) == Some(&quote);
@@ -81,43 +94,28 @@ pub(crate) fn parse_records(text: &str, delim: u8, quote: u8, mut on_record: imp
             let mut s = String::new();
             let mut start = i;
             loop {
-                match b.get(i) {
-                    None => {
-                        s.push_str(text.get(start..i).unwrap_or(""));
-                        break;
-                    }
-                    Some(&c) if c == quote => {
-                        s.push_str(text.get(start..i).unwrap_or(""));
-                        if b.get(i + 1) == Some(&quote) {
-                            s.push(char::from(quote));
-                            i += 2;
-                            start = i;
-                        } else {
-                            i += 1;
-                            break;
-                        }
-                    }
-                    Some(_) => i += 1,
+                i = scan(i, &|c| c == quote);
+                s.push_str(text.get(start..i).unwrap_or(""));
+                if i >= n {
+                    break;
+                }
+                if b.get(i + 1) == Some(&quote) {
+                    s.push(char::from(quote));
+                    i += 2;
+                    start = i;
+                } else {
+                    i += 1;
+                    break;
                 }
             }
             // Lenient: anything between the closing quote and the next delimiter is kept.
             let tail = i;
-            while let Some(&c) = b.get(i) {
-                if is_break(c) {
-                    break;
-                }
-                i += 1;
-            }
+            i = scan(i, &is_break);
             s.push_str(text.get(tail..i).unwrap_or(""));
             Cell { text: s.into(), quoted: true }
         } else {
             let start = i;
-            while let Some(&c) = b.get(i) {
-                if is_break(c) {
-                    break;
-                }
-                i += 1;
-            }
+            i = scan(i, &is_break);
             Cell::from(text.get(start..i).unwrap_or(""))
         };
         stats.fields += 1;
@@ -133,8 +131,7 @@ pub(crate) fn parse_records(text: &str, delim: u8, quote: u8, mut on_record: imp
                     // "a," ends with an empty field.
                     record.push(Cell::default());
                     stats.fields += 1;
-                    on_record(std::mem::take(&mut record));
-                    stats.ended_with_terminator = false;
+                    emit(&mut record, &mut stats, false);
                 }
             }
             Some(&c) if c == b'\r' || c == b'\n' => {
@@ -142,13 +139,9 @@ pub(crate) fn parse_records(text: &str, delim: u8, quote: u8, mut on_record: imp
                 if c == b'\r' && b.get(i) == Some(&b'\n') {
                     i += 1;
                 }
-                on_record(std::mem::take(&mut record));
-                stats.ended_with_terminator = true;
+                emit(&mut record, &mut stats, true);
             }
-            None => {
-                on_record(std::mem::take(&mut record));
-                stats.ended_with_terminator = false;
-            }
+            None => emit(&mut record, &mut stats, false),
             Some(_) => i += 1,
         }
     }
@@ -165,29 +158,50 @@ pub(crate) fn guess_header(rows: &[Row]) -> bool {
     !first.is_empty() && first.iter().all(|c| !c.trim().is_empty() && c.trim().parse::<f64>().is_err())
 }
 
-/// Writes the table in the dialect. The second value counts characters the encoding could not
-/// represent (see [`encode`]).
-pub fn write(table: &Table, d: &Dialect) -> (Vec<u8>, usize) {
+/// Writes the table in the dialect to `out`, row by row, so saving never holds a second copy
+/// of the file. Returns how many characters the encoding could not represent (see
+/// [`encode_into`]).
+pub fn write_to(table: &Table, d: &Dialect, out: &mut impl Write) -> std::io::Result<usize> {
     let delim = char::from(d.delimiter);
     let q = char::from(d.quote);
     let nl = d.line_ending.as_str();
     let rows = table.row_count();
-    let mut out = String::with_capacity(rows.saturating_mul(16).min(1 << 28));
+    let mut lossy = 0usize;
+    let mut line = String::new();
+    let mut bytes = Vec::new();
+    out.write_all(bom(d.encoding))?;
     for (ri, row) in table.rows().iter().enumerate() {
+        line.clear();
         let count = if d.pad_rows { table.width().max(row.len()) } else { row.len() };
         for c in 0..count {
             if c > 0 {
-                out.push(delim);
+                line.push(delim);
             }
             let (text, quoted) = row.get(c).map_or(("", false), |s| (s.as_str(), s.quoted));
             let quoting = if quoted && d.quoting == Quoting::AsSource { Quoting::All } else { d.quoting };
-            write_field(&mut out, text, delim, q, quoting);
+            write_field(&mut line, text, delim, q, quoting);
         }
         if ri + 1 < rows || d.trailing_newline {
-            out.push_str(nl);
+            line.push_str(nl);
+        }
+        match d.encoding {
+            Encoding::Utf8 | Encoding::Utf8Bom => out.write_all(line.as_bytes())?,
+            _ => {
+                bytes.clear();
+                lossy += encode_into(&line, d.encoding, &mut bytes);
+                out.write_all(&bytes)?;
+            }
         }
     }
-    encode(&out, d.encoding)
+    Ok(lossy)
+}
+
+/// The table in the dialect as bytes (see [`write_to`]); for tests and small documents.
+pub fn write(table: &Table, d: &Dialect) -> (Vec<u8>, usize) {
+    let mut out = Vec::with_capacity(table.row_count().saturating_mul(16).min(1 << 28));
+    // Writing into a vector cannot fail.
+    let lossy = write_to(table, d, &mut out).unwrap_or(0);
+    (out, lossy)
 }
 
 /// Clipboard text to cells: tab-separated, double-quote quoted, any line ending. Plain text
@@ -222,18 +236,31 @@ pub fn write_row(row: &[Cell], delim: char, quote: char) -> String {
 }
 
 fn write_field(out: &mut String, text: &str, delim: char, q: char, quoting: Quoting) {
-    let needs = quoting == Quoting::All || text.chars().any(|ch| ch == delim || ch == q || ch == '\r' || ch == '\n');
-    if needs {
-        out.push(q);
+    let needs = quoting == Quoting::All || contains_any(text, delim, q);
+    if !needs {
+        out.push_str(text);
+        return;
+    }
+    out.push(q);
+    if text.contains(q) {
         for ch in text.chars() {
             if ch == q {
                 out.push(q);
             }
             out.push(ch);
         }
-        out.push(q);
     } else {
         out.push_str(text);
+    }
+    out.push(q);
+}
+
+/// Whether the text has the delimiter, the quote or a line break. Both are single bytes in the
+/// dialect, so for ASCII ones (always, in practice) this is a byte scan.
+fn contains_any(text: &str, delim: char, q: char) -> bool {
+    match (u8::try_from(delim), u8::try_from(q)) {
+        (Ok(d), Ok(qb)) if d.is_ascii() && qb.is_ascii() => text.bytes().any(|b| b == d || b == qb || b == b'\r' || b == b'\n'),
+        _ => text.chars().any(|ch| ch == delim || ch == q || ch == '\r' || ch == '\n'),
     }
 }
 

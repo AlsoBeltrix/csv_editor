@@ -3,11 +3,13 @@
 //! The operations at the bottom are what the interface calls: each builds one undoable edit,
 //! growing the table when the target lies past its last row.
 
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use crate::dialect::Dialect;
 use crate::edit::{Edit, History};
-use crate::io::{Error, ParseOptions, parse, write};
+use crate::io::{Error, ParseOptions, parse, write, write_to};
 use crate::selection::{CellRef, Range};
 use crate::table::{Cell, Row, Table};
 
@@ -66,16 +68,23 @@ impl Document {
     /// flag. Returns how many characters the encoding could not represent.
     pub fn save_to(&mut self, path: impl AsRef<Path>) -> Result<usize, Error> {
         let path = path.as_ref();
-        let (bytes, lossy) = self.to_bytes();
         let io = |source: std::io::Error| Error::Io { path: path.display().to_string(), source };
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".csv-editor-tmp");
         let tmp = PathBuf::from(tmp);
-        std::fs::write(&tmp, &bytes).map_err(io)?;
-        if let Err(e) = std::fs::rename(&tmp, path) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(io(e));
-        }
+        let written = (|| {
+            let mut out = BufWriter::with_capacity(1 << 20, File::create(&tmp)?);
+            let lossy = write_to(&self.table, &self.dialect, &mut out)?;
+            out.flush()?;
+            Ok::<usize, std::io::Error>(lossy)
+        })();
+        let lossy = match written.and_then(|lossy| std::fs::rename(&tmp, path).map(|()| lossy)) {
+            Ok(lossy) => lossy,
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(io(e));
+            }
+        };
         self.path = Some(path.to_path_buf());
         self.history.mark_saved();
         self.saved_dialect = self.dialect;
