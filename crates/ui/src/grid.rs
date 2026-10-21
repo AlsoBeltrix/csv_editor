@@ -24,9 +24,24 @@ pub struct GridState {
     pub row_height: f32,
     pub header_height: f32,
     pub zoom: f32,
+    /// The in-cell editor, while a cell is being edited.
+    pub editor: Option<CellEditor>,
+    /// A request to rename this column's header, picked up by the app's dialog.
+    pub rename_request: Option<usize>,
     drag: Option<Drag>,
     /// Wheel movement not yet turned into whole rows and columns.
     wheel: Vec2,
+}
+
+/// Text being typed into a cell.
+#[derive(Clone, Debug)]
+pub struct CellEditor {
+    pub cell: CellRef,
+    pub text: String,
+    /// Started by typing over the cell: arrow keys commit and move, as in a spreadsheet's Enter
+    /// mode. Started with F2 or a double-click, arrows move inside the text instead.
+    pub replace: bool,
+    fresh: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,8 +54,49 @@ enum Drag {
 
 impl Default for GridState {
     fn default() -> Self {
-        GridState { default_col_width: 96.0, row_height: 22.0, header_height: 24.0, zoom: 1.0, drag: None, wheel: Vec2::ZERO }
+        GridState {
+            default_col_width: 96.0,
+            row_height: 22.0,
+            header_height: 24.0,
+            zoom: 1.0,
+            editor: None,
+            rename_request: None,
+            drag: None,
+            wheel: Vec2::ZERO,
+        }
     }
+}
+
+/// Starts editing the active cell: with `text` typed over it, or its current text.
+pub fn start_edit(grid: &mut GridState, view: &DocView, typed: Option<String>) {
+    let cell = view.sel.active;
+    let (text, replace) = match typed {
+        Some(t) => (t, true),
+        None => (view.doc.table.get(cell.row, cell.col).to_string(), false),
+    };
+    grid.editor = Some(CellEditor { cell, text, replace, fresh: true });
+}
+
+/// Writes the editor's text into its cell (one undo step) and closes the editor.
+pub fn commit_edit(grid: &mut GridState, view: &mut DocView) -> bool {
+    match grid.editor.take() {
+        Some(ed) => view.doc.set_cell(ed.cell.row, ed.cell.col, ed.text.as_str()),
+        None => false,
+    }
+}
+
+/// [`commit_edit`] for an optional view (the editor only ever belongs to the active document).
+pub fn commit_edit_in(grid: &mut GridState, view: Option<&mut DocView>) {
+    match view {
+        Some(view) => {
+            commit_edit(grid, view);
+        }
+        None => grid.editor = None,
+    }
+}
+
+pub fn cancel_edit(grid: &mut GridState) {
+    grid.editor = None;
 }
 
 impl GridState {
@@ -199,6 +255,10 @@ pub fn show(app: &mut EditorApp, ui: &mut egui::Ui, t: &Tokens) {
     let htrack = Rect::from_min_max(pos2(full.left(), rect.bottom()), pos2(rect.right(), full.bottom()));
     ui.allocate_rect(full, Sense::hover());
     let resp = ui.interact(rect, ui.scope_id().with("grid"), Sense::click_and_drag());
+    // Keys go to the grid unless something else (the cell editor, a dialog) has asked for them.
+    if grid.editor.is_none() && ui.memory(|m| m.focused().is_none()) {
+        resp.request_focus();
+    }
 
     let geo = geometry(grid, view, rect);
     interact(grid, view, ui, &resp, &geo);
@@ -208,6 +268,115 @@ pub fn show(app: &mut EditorApp, ui: &mut egui::Ui, t: &Tokens) {
     vertical_scrollbar(view, ui, vtrack, &geo, t);
     horizontal_scrollbar(grid, view, ui, htrack, &geo, t);
     ui.painter().rect_filled(Rect::from_min_max(pos2(rect.right(), rect.bottom()), full.max), 0.0, t.tab_bar);
+    editor_ui(grid, view, ui, &resp, &geo, t);
+    resp.context_menu(|ui| crate::ops::context_menu(grid, view, ui));
+}
+
+/// The in-cell editor: key handling first (Enter, Tab, Escape and, in replace mode, arrows act
+/// on the grid, not the text), then the text field drawn over the cell, growing to fit.
+fn editor_ui(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, grid_resp: &Response, geo: &Geo, t: &Tokens) {
+    let Some(ed) = grid.editor.as_mut() else { return };
+    let replace = ed.replace;
+    let (enter, shift_enter, alt_enter, tab, shift_tab, esc) = ui.input_mut(|i| {
+        (
+            i.consume_key(Modifiers::NONE, Key::Enter),
+            i.consume_key(Modifiers::SHIFT, Key::Enter),
+            i.consume_key(Modifiers::ALT, Key::Enter),
+            i.consume_key(Modifiers::NONE, Key::Tab),
+            i.consume_key(Modifiers::SHIFT, Key::Tab),
+            i.consume_key(Modifiers::NONE, Key::Escape),
+        )
+    });
+    if alt_enter {
+        ed.text.push('\n');
+    }
+    let mut arrows = (0i64, 0i64);
+    if replace {
+        arrows = ui.input_mut(|i| {
+            let mut d = (0i64, 0i64);
+            if i.consume_key(Modifiers::NONE, Key::ArrowDown) {
+                d.0 += 1;
+            }
+            if i.consume_key(Modifiers::NONE, Key::ArrowUp) {
+                d.0 -= 1;
+            }
+            if i.consume_key(Modifiers::NONE, Key::ArrowRight) {
+                d.1 += 1;
+            }
+            if i.consume_key(Modifiers::NONE, Key::ArrowLeft) {
+                d.1 -= 1;
+            }
+            d
+        });
+    }
+    if esc {
+        grid.editor = None;
+        ui.memory_mut(|m| m.request_focus(grid_resp.id));
+        return;
+    }
+    // (commit, move within the selection by row?, direction)
+    let after: Option<(bool, i64, i64)> = if enter {
+        Some((false, 1, 0))
+    } else if shift_enter {
+        Some((false, -1, 0))
+    } else if tab {
+        Some((true, 0, 1))
+    } else if shift_tab {
+        Some((true, 0, -1))
+    } else if arrows != (0, 0) {
+        Some((false, arrows.0, arrows.1))
+    } else {
+        None
+    };
+    if let Some((by_row, dr, dc)) = after {
+        commit_edit(grid, view);
+        let within_selection = (enter || shift_enter || tab || shift_tab) && view.sel.cycle(dr + dc > 0, by_row);
+        if !within_selection {
+            step(view, dr, dc, false, false);
+        }
+        ensure_visible(grid, view, geo);
+        ui.memory_mut(|m| m.request_focus(grid_resp.id));
+        return;
+    }
+    let Some(ed) = grid.editor.as_mut() else { return };
+    let Some(cell) = geo.cell_rect(ed.cell) else {
+        // Scrolled out of view: keep the text, draw nothing.
+        return;
+    };
+    let z = geo.z;
+    let font = theme::cell_font(13.0 * z);
+    let needed = ui.ctx().fonts_mut(|f| f.layout_no_wrap(ed.text.clone(), font.clone(), Color32::WHITE).size());
+    let w = (needed.x + 14.0 * z).max(cell.width()).min((geo.cells.right() - cell.left()).max(cell.width()));
+    let h = (needed.y + 6.0 * z).max(cell.height());
+    let rect = Rect::from_min_size(cell.min, vec2(w, h)).intersect(geo.rect);
+    let p = ui.painter();
+    p.rect_filled(rect, 0.0, t.grid_bg);
+    p.rect_stroke(rect, 0.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
+    let inner = rect.shrink2(vec2(4.0 * z, 1.0));
+    let fresh = std::mem::take(&mut ed.fresh);
+    let editor_id = ui.scope_id().with("cell-editor");
+    if fresh {
+        // Focus and the key filter from the first frame on, so an arrow key pressed right after
+        // typing moves the caret (or commits) instead of moving focus to another widget.
+        ui.memory_mut(|m| {
+            m.request_focus(editor_id);
+            m.set_focus_lock_filter(editor_id, EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true });
+        });
+    }
+    let output = ui.put(
+        inner,
+        egui::TextEdit::multiline(&mut ed.text)
+            .id(editor_id)
+            .font(font)
+            .text_color(t.cell_text)
+            .frame(egui::Frame::NONE)
+            .desired_width(inner.width())
+            .lock_focus(true),
+    );
+    if !fresh && !output.has_focus() {
+        // Clicked somewhere else (a menu, another panel): the edit is done.
+        commit_edit(grid, view);
+    }
 }
 
 fn paint(ui: &egui::Ui, geo: &Geo, view: &DocView, t: &Tokens) {
@@ -346,24 +515,44 @@ fn interact(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, resp: &
 
     if resp.double_clicked()
         && let Some(p) = resp.interact_pointer_pos()
-        && in_head(p)
-        && let Some(col) = geo.col_edge_at(p.x)
     {
-        autofit(grid, view, ui, col);
         grid.drag = None;
-        return;
+        if in_head(p) {
+            if let Some(col) = geo.col_edge_at(p.x) {
+                autofit(grid, view, ui, col);
+            } else if view.doc.dialect.header
+                && let Some(col) = geo.col_at(p.x)
+            {
+                grid.rename_request = Some(col);
+            }
+            return;
+        }
+        if p.x >= geo.cells.left() && p.y >= geo.cells.top() {
+            start_edit(grid, view, None);
+            return;
+        }
     }
 
     let press = if resp.drag_started() {
         ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
-    } else if resp.clicked() {
+    } else if resp.clicked() || resp.secondary_clicked() {
         resp.interact_pointer_pos()
     } else {
         None
     };
     if let Some(p) = press {
+        commit_edit(grid, view);
         resp.request_focus();
         let dragging = resp.drag_started();
+        // A right-click on a cell outside the selection selects it; inside, it keeps the selection.
+        if resp.secondary_clicked() {
+            if let Some(c) = geo.cell_at(p)
+                && !view.sel.contains(clamp(c))
+            {
+                view.sel = Selection::at(clamp(c));
+            }
+            return;
+        }
         if in_corner(p) {
             let all = Range::new(CellRef::new(body_start, 0), max);
             view.sel = Selection { active: CellRef::new(body_start, 0), anchor: CellRef::new(body_start, 0), ranges: vec![all] };
@@ -472,25 +661,57 @@ fn step(view: &mut DocView, dr: i64, dc: i64, shift: bool, jump: bool) {
     if shift { view.sel.extend_to(to) } else { view.sel = Selection::at(to) }
 }
 
-fn keyboard(grid: &GridState, view: &mut DocView, ui: &mut egui::Ui, geo: &Geo) {
-    let keys: Vec<(Key, Modifiers)> = ui.input(|i| {
-        i.events
-            .iter()
-            .filter_map(|e| if let Event::Key { key, pressed: true, modifiers, .. } = e { Some((*key, *modifiers)) } else { None })
-            .collect()
+fn keyboard(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, geo: &Geo) {
+    let (keys, typed): (Vec<(Key, Modifiers)>, String) = ui.input(|i| {
+        let mut keys = Vec::new();
+        let mut typed = String::new();
+        for e in &i.events {
+            match e {
+                Event::Key { key, pressed: true, modifiers, .. } => keys.push((*key, *modifiers)),
+                Event::Text(s) => typed.push_str(s),
+                _ => {}
+            }
+        }
+        (keys, typed)
     });
+    if !typed.is_empty() && !typed.chars().all(char::is_control) {
+        // The typed text opens the editor with that text; the text field must not see it again.
+        ui.input_mut(|i| i.events.retain(|e| !matches!(e, Event::Text(_))));
+        start_edit(grid, view, Some(typed));
+        ensure_visible(grid, view, geo);
+        return;
+    }
     if keys.is_empty() {
         return;
     }
     let body_start = view.body_start();
     let page = geo.full_rows().saturating_sub(1).max(1) as i64;
     for (key, m) in keys {
-        let (ctrl, shift) = (m.command, m.shift);
+        let (ctrl, shift, alt) = (m.command, m.shift, m.alt);
         match key {
+            Key::ArrowDown if alt => {
+                crate::ops::move_rows(grid, view, 1);
+            }
+            Key::ArrowUp if alt => {
+                crate::ops::move_rows(grid, view, -1);
+            }
+            Key::ArrowRight if alt => {
+                crate::ops::move_cols(grid, view, 1);
+            }
+            Key::ArrowLeft if alt => {
+                crate::ops::move_cols(grid, view, -1);
+            }
             Key::ArrowDown => step(view, 1, 0, shift, ctrl),
             Key::ArrowUp => step(view, -1, 0, shift, ctrl),
             Key::ArrowLeft => step(view, 0, -1, shift, ctrl),
             Key::ArrowRight => step(view, 0, 1, shift, ctrl),
+            Key::Delete | Key::Backspace => {
+                crate::ops::clear(grid, view);
+            }
+            Key::F2 => start_edit(grid, view, None),
+            Key::D if ctrl => {
+                crate::ops::fill_down(grid, view);
+            }
             Key::PageDown => step(view, page, 0, shift, false),
             Key::PageUp => step(view, -page, 0, shift, false),
             Key::Home => {
@@ -592,7 +813,7 @@ fn vertical_scrollbar(view: &mut DocView, ui: &mut egui::Ui, track: Rect, geo: &
     let max_scroll = (extent - visible).max(0.0);
     let scroll = view.scroll_row.saturating_sub(body_start) as f32;
     let id = ui.scope_id().with("vscroll");
-    let resp = ui.interact(track, id, Sense::click_and_drag());
+    let resp = ui.interact(track, id, Sense::CLICK | Sense::DRAG);
     ui.painter().rect_filled(track, 0.0, t.tab_bar);
     let thumb_h = (track.height() * visible / extent.max(visible)).clamp(24.0_f32.min(track.height()), track.height());
     let travel = (track.height() - thumb_h).max(0.0);
@@ -632,7 +853,7 @@ fn horizontal_scrollbar(grid: &GridState, view: &mut DocView, ui: &mut egui::Ui,
     let max_scroll = (extent - visible).max(0.0);
     let scroll = view.scroll_col as f32;
     let id = ui.scope_id().with("hscroll");
-    let resp = ui.interact(track, id, Sense::click_and_drag());
+    let resp = ui.interact(track, id, Sense::CLICK | Sense::DRAG);
     ui.painter().rect_filled(track, 0.0, t.tab_bar);
     let thumb_w = (track.width() * visible / extent.max(visible)).clamp(24.0_f32.min(track.width()), track.width());
     let travel = (track.width() - thumb_w).max(0.0);

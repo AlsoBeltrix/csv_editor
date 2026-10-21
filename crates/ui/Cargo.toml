@@ -15,4 +15,4 @@ egui = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
-egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+egui_kittest = { workspace = true }

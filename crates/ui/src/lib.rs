@@ -2,6 +2,7 @@
 //! `csv_editor_table`: this crate holds interface state and drawing, the table crate holds the data.
 
 pub mod grid;
+pub mod ops;
 pub mod theme;
 pub mod view;
 
@@ -20,6 +21,15 @@ pub struct Services {
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<PathBuf>>>,
 }
 
+/// A "save changes?" question and what happens once it is answered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Prompt {
+    /// Close this tab.
+    Close(usize),
+    /// Quit the application once every document is saved or abandoned.
+    Quit,
+}
+
 /// The whole interface. The platform shell (`apps/csv-editor`) owns the window and calls
 /// [`EditorApp::logic`] then [`EditorApp::ui`] every frame.
 pub struct EditorApp {
@@ -33,6 +43,11 @@ pub struct EditorApp {
     pub services: Services,
     /// A message box: title and text.
     pub message: Option<(String, String)>,
+    prompt: Option<Prompt>,
+    /// The header rename dialog: column and the text being edited.
+    rename: Option<(usize, String)>,
+    /// Set once the user has answered every "save changes?" question before quitting.
+    quit_confirmed: bool,
     title: String,
 }
 
@@ -47,6 +62,9 @@ impl EditorApp {
             active: 0,
             services,
             message: None,
+            prompt: None,
+            rename: None,
+            quit_confirmed: false,
             title: String::new(),
         }
     }
@@ -83,7 +101,18 @@ impl EditorApp {
         self.active = self.docs.len() - 1;
     }
 
-    /// Closes a tab. There is always at least one document.
+    /// Closes a tab, asking first when it has unsaved changes.
+    pub fn request_close(&mut self, index: usize) {
+        grid::commit_edit_in(&mut self.grid, self.docs.get_mut(index));
+        if self.docs.get(index).is_some_and(|d| d.doc.is_dirty()) {
+            self.active = index;
+            self.prompt = Some(Prompt::Close(index));
+        } else {
+            self.close_document(index);
+        }
+    }
+
+    /// Closes a tab without asking. There is always at least one document.
     pub fn close_document(&mut self, index: usize) {
         if index < self.docs.len() {
             self.docs.remove(index);
@@ -101,30 +130,78 @@ impl EditorApp {
         }
     }
 
+    /// Saves the document to its file, or asks where. Returns whether it was saved.
+    pub fn save(&mut self, index: usize) -> bool {
+        grid::commit_edit_in(&mut self.grid, self.docs.get_mut(index));
+        match self.docs.get(index).and_then(|d| d.doc.path.clone()) {
+            Some(path) => self.write_to(index, &path),
+            None => self.save_as(index),
+        }
+    }
+
+    pub fn save_as(&mut self, index: usize) -> bool {
+        grid::commit_edit_in(&mut self.grid, self.docs.get_mut(index));
+        let Some(view) = self.docs.get(index) else { return false };
+        let name = view.doc.display_name();
+        let suggested = if Path::new(&name).extension().is_some() { name } else { format!("{name}.csv") };
+        let Some(path) = self.services.pick_save.as_ref().and_then(|pick| pick(&suggested)) else { return false };
+        // Saving as .tsv means tabs; anything else keeps the delimiter the file came with.
+        if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("tsv") || e.eq_ignore_ascii_case("tab"))
+            && let Some(view) = self.docs.get_mut(index)
+        {
+            view.doc.dialect.delimiter = b'\t';
+        }
+        self.write_to(index, &path)
+    }
+
+    fn write_to(&mut self, index: usize, path: &Path) -> bool {
+        let Some(view) = self.docs.get_mut(index) else { return false };
+        match view.doc.save_to(path) {
+            Ok(0) => true,
+            Ok(lost) => {
+                let encoding = view.doc.dialect.encoding.label();
+                self.message = Some((
+                    "Saved with substitutions".to_string(),
+                    format!("{lost} character(s) cannot be represented in {encoding} and were written as '?'. Save the file as UTF-8 to keep them."),
+                ));
+                true
+            }
+            Err(e) => {
+                self.message = Some(("Can't save file".to_string(), e.to_string()));
+                false
+            }
+        }
+    }
+
     fn wants_dark(&self, ctx: &egui::Context) -> bool {
         if self.system_theme { ctx.system_theme().map(|t| t == egui::Theme::Dark).unwrap_or(self.dark) } else { self.dark }
     }
 
-    /// Per-frame state updates that are not drawing: theme, window title, global shortcuts.
+    /// Per-frame state updates that are not drawing: theme, window title, global shortcuts,
+    /// the quit guard.
     pub fn logic(&mut self, ctx: &egui::Context) {
         let dark = self.wants_dark(ctx);
         if self.theme_applied != Some(dark) {
             theme::apply(ctx, dark);
             self.theme_applied = Some(dark);
         }
-        let shortcuts: [(Key, fn(&mut EditorApp)); 7] = [
-            (Key::O, |a| a.open_dialog()),
-            (Key::N, |a| a.new_document()),
-            (Key::W, |a| a.close_document(a.active)),
-            (Key::Equals, |a| a.grid.zoom_step(1)),
-            (Key::Plus, |a| a.grid.zoom_step(1)),
-            (Key::Minus, |a| a.grid.zoom_step(-1)),
-            (Key::Num0, |a| a.grid.set_zoom(1.0)),
-        ];
-        for (key, action) in shortcuts {
-            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) {
-                action(self);
-            }
+        if let Some(col) = self.grid.rename_request.take()
+            && let Some(view) = self.active_view()
+        {
+            self.rename = Some((col, view.header_name(col).to_string()));
+        }
+        let dialog_open = self.message.is_some() || self.prompt.is_some() || self.rename.is_some();
+        if !dialog_open && self.grid.editor.is_none() {
+            self.shortcuts(ctx);
+        }
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.quit_confirmed
+            && self.prompt.is_none()
+            && let Some(i) = self.docs.iter().position(|d| d.doc.is_dirty())
+        {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            self.active = i;
+            self.prompt = Some(Prompt::Quit);
         }
         let title = match self.active_view() {
             Some(v) => format!("{}{} - CSV Editor", v.doc.display_name(), if v.doc.is_dirty() { "*" } else { "" }),
@@ -133,6 +210,41 @@ impl EditorApp {
         if title != self.title {
             ctx.send_viewport_cmd(ViewportCommand::Title(title.clone()));
             self.title = title;
+        }
+    }
+
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        let app_keys: [(Modifiers, Key, fn(&mut EditorApp)); 9] = [
+            (Modifiers::COMMAND, Key::O, |a| a.open_dialog()),
+            (Modifiers::COMMAND, Key::N, |a| a.new_document()),
+            (Modifiers::COMMAND, Key::W, |a| a.request_close(a.active)),
+            (Modifiers::COMMAND, Key::S, |a| {
+                a.save(a.active);
+            }),
+            (Modifiers::COMMAND | Modifiers::SHIFT, Key::S, |a| {
+                a.save_as(a.active);
+            }),
+            (Modifiers::COMMAND, Key::Equals, |a| a.grid.zoom_step(1)),
+            (Modifiers::COMMAND, Key::Plus, |a| a.grid.zoom_step(1)),
+            (Modifiers::COMMAND, Key::Minus, |a| a.grid.zoom_step(-1)),
+            (Modifiers::COMMAND, Key::Num0, |a| a.grid.set_zoom(1.0)),
+        ];
+        for (mods, key, action) in app_keys {
+            if ctx.input_mut(|i| i.consume_key(mods, key)) {
+                action(self);
+            }
+        }
+        let EditorApp { grid, docs, active, .. } = self;
+        let Some(view) = docs.get_mut(*active) else { return };
+        let doc_keys: [(Modifiers, Key, fn(&mut grid::GridState, &mut DocView) -> bool); 3] = [
+            (Modifiers::COMMAND, Key::Z, ops::undo),
+            (Modifiers::COMMAND, Key::Y, ops::redo),
+            (Modifiers::COMMAND | Modifiers::SHIFT, Key::Z, ops::redo),
+        ];
+        for (mods, key, action) in doc_keys {
+            if ctx.input_mut(|i| i.consume_key(mods, key)) {
+                action(grid, view);
+            }
         }
     }
 
@@ -151,6 +263,8 @@ impl EditorApp {
             .show(ui, |ui| self.status_bar(ui, &t));
         egui::CentralPanel::default().frame(egui::Frame::new().fill(t.grid_bg)).show(ui, |ui| grid::show(self, ui, &t));
         self.message_box(ui.ctx());
+        self.save_prompt(ui.ctx());
+        self.rename_dialog(ui.ctx());
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, t: &Tokens) {
@@ -165,14 +279,29 @@ impl EditorApp {
                     self.open_dialog();
                 }
                 ui.separator();
+                if ui.add(egui::Button::new("Save").shortcut_text("Ctrl+S")).clicked() {
+                    ui.close();
+                    self.save(self.active);
+                }
+                if ui.add(egui::Button::new("Save As…").shortcut_text("Ctrl+Shift+S")).clicked() {
+                    ui.close();
+                    self.save_as(self.active);
+                }
+                ui.separator();
                 if ui.add(egui::Button::new("Close").shortcut_text("Ctrl+W")).clicked() {
-                    self.close_document(self.active);
+                    self.request_close(self.active);
                     ui.close();
                 }
                 if ui.button("Quit").clicked() {
                     ui.ctx().send_viewport_cmd(ViewportCommand::Close);
                 }
             });
+            let EditorApp { grid, docs, active, .. } = self;
+            if let Some(view) = docs.get_mut(*active) {
+                ui.menu_button("Edit", |ui| ops::edit_menu(grid, view, ui));
+                ui.menu_button("Rows", |ui| ops::rows_menu(grid, view, ui));
+                ui.menu_button("Columns", |ui| ops::cols_menu(grid, view, ui));
+            }
             ui.menu_button("View", |ui| {
                 if ui.add(egui::Button::new("Zoom in").shortcut_text("Ctrl++")).clicked() {
                     self.grid.zoom_step(1);
@@ -229,7 +358,7 @@ impl EditorApp {
             }
         });
         if let Some(i) = close {
-            self.close_document(i);
+            self.request_close(i);
         }
     }
 
@@ -247,10 +376,14 @@ impl EditorApp {
                 let cells: usize = sel.ranges.iter().map(|r| r.row_count().saturating_mul(r.col_count())).sum();
                 ui.colored_label(t.text_dim, format!("{} × {} selected ({cells} cells)", bounds.row_count(), bounds.col_count()));
             }
+            if view.doc.is_dirty() {
+                ui.separator();
+                ui.colored_label(t.text_dim, "Unsaved changes");
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.colored_label(t.text_dim, format!("{}%", (zoom * 100.0).round()));
                 ui.separator();
-                ui.colored_label(t.text_dim, format!("{}{}", column_label_for(sel.active.col), sel.active.row + 1));
+                ui.colored_label(t.text_dim, format!("{}{}", csv_editor_table::column_label(sel.active.col), sel.active.row + 1));
             });
         });
     }
@@ -264,7 +397,7 @@ impl EditorApp {
             ui.label(body);
             ui.add_space(12.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("OK").clicked() {
+                if ui.button("OK").clicked() || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Escape)) {
                     self.message = None;
                 }
             });
@@ -273,8 +406,123 @@ impl EditorApp {
             self.message = None;
         }
     }
-}
 
-fn column_label_for(col: usize) -> String {
-    csv_editor_table::column_label(col)
+    fn save_prompt(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = self.prompt else { return };
+        let index = match prompt {
+            Prompt::Close(i) => i,
+            Prompt::Quit => self.active,
+        };
+        let Some(name) = self.docs.get(index).map(|d| d.doc.display_name()) else {
+            self.prompt = None;
+            return;
+        };
+        #[derive(PartialEq)]
+        enum Answer {
+            Save,
+            Discard,
+            Cancel,
+        }
+        let mut answer = None;
+        let response = egui::Modal::new(Id::unique("save-prompt")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading(format!("Save changes to {name}?"));
+            ui.add_space(6.0);
+            ui.label("Your changes will be lost if you don't save them.");
+            ui.add_space(12.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Cancel").clicked() {
+                    answer = Some(Answer::Cancel);
+                }
+                if ui.button("Don't save").clicked() {
+                    answer = Some(Answer::Discard);
+                }
+                if ui.button("Save").clicked() {
+                    answer = Some(Answer::Save);
+                }
+            });
+            if ui.input(|i| i.key_pressed(Key::Escape)) {
+                answer = Some(Answer::Cancel);
+            }
+        });
+        if response.should_close() {
+            answer = Some(Answer::Cancel);
+        }
+        let Some(answer) = answer else { return };
+        let proceed = match answer {
+            Answer::Cancel => {
+                self.prompt = None;
+                return;
+            }
+            Answer::Discard => true,
+            Answer::Save => self.save(index),
+        };
+        if !proceed {
+            // The save dialog was cancelled or failed: stay put, the prompt is over.
+            self.prompt = None;
+            return;
+        }
+        match prompt {
+            Prompt::Close(i) => {
+                self.close_document(i);
+                self.prompt = None;
+            }
+            Prompt::Quit => {
+                if answer == Answer::Discard
+                    && let Some(view) = self.docs.get_mut(index)
+                {
+                    view.doc.history.mark_saved();
+                }
+                match self.docs.iter().position(|d| d.doc.is_dirty()) {
+                    Some(next) => self.active = next,
+                    None => {
+                        self.prompt = None;
+                        self.quit_confirmed = true;
+                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                    }
+                }
+            }
+        }
+    }
+
+    fn rename_dialog(&mut self, ctx: &egui::Context) {
+        let Some((col, mut text)) = self.rename.take() else { return };
+        let mut done = None;
+        let response = egui::Modal::new(Id::unique("rename-header")).show(ctx, |ui| {
+            ui.set_width(320.0);
+            ui.heading(format!("Rename column {}", csv_editor_table::column_label(col)));
+            ui.add_space(6.0);
+            let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY));
+            if !ui.memory(|m| m.has_focus(edit.id)) && done.is_none() {
+                edit.request_focus();
+            }
+            if edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                done = Some(true);
+            }
+            if ui.input(|i| i.key_pressed(Key::Escape)) {
+                done = Some(false);
+            }
+            ui.add_space(10.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Cancel").clicked() {
+                    done = Some(false);
+                }
+                if ui.button("Rename").clicked() {
+                    done = Some(true);
+                }
+            });
+        });
+        if response.should_close() {
+            done = Some(false);
+        }
+        match done {
+            Some(true) => {
+                if let Some(view) = self.active_view_mut() {
+                    view.doc.set_cell(0, col, text.as_str());
+                }
+            }
+            Some(false) => {}
+            None => self.rename = Some((col, text)),
+        }
+    }
 }

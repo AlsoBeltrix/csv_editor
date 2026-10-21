@@ -4,10 +4,11 @@ Status: **approved 2026-10-21** (owner chose "lean standalone app" over wrapping
 Implementation: in progress on `master`, slice by slice. Each slice is one or more commits that
 pass the verification entry point before landing.
 
-Progress: slices 1–3 landed 2026-10-21. Verified on this machine: build, tests, clippy, fmt, and a
+Progress: slices 1–4 landed 2026-10-21. Verified on this machine: build, tests, clippy, fmt, and a
 headless screenshot (`CSV_EDITOR_SCREENSHOT=<png>` saves the window after a few frames and quits)
 showing a 400-row sample with header names, leading zeros kept and numbers right-aligned.
-Next: slice 4 (editing, undo, save).
+Slice 4 added headless interface tests (`crates/ui/tests/editing.rs`, egui_kittest) that type,
+press keys and check the document. Next: slice 5 (clipboard).
 
 ## Goal
 

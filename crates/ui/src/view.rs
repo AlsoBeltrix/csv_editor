@@ -64,6 +64,19 @@ impl DocView {
         }
     }
 
+    /// Keeps the selection inside the grid after the table shrank (undo, deletions).
+    pub fn clamp_selection(&mut self) {
+        let max = self.max_cell();
+        let start = self.body_start();
+        let clamp = |c: CellRef| CellRef::new(c.row.clamp(start, max.row), c.col.min(max.col));
+        self.sel.active = clamp(self.sel.active);
+        self.sel.anchor = clamp(self.sel.anchor);
+        for r in &mut self.sel.ranges {
+            *r = csv_editor_table::Range::new(clamp(r.start), clamp(r.end));
+        }
+        self.scroll_row = self.scroll_row.max(start);
+    }
+
     /// Whether this is an untouched, unnamed, empty document (the one a first Open replaces).
     pub fn is_blank(&self) -> bool {
         self.doc.path.is_none() && self.doc.table.is_empty() && !self.doc.is_dirty() && !self.doc.history.can_undo()
