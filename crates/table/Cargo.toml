@@ -1,0 +1,14 @@
+[package]
+name = "csv-editor-table"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "CSV editor table model: text cells, edits with undo, delimited-text I/O, sort, filter, find"
+
+[lints]
+workspace = true
+
+[dependencies]
+compact_str = { workspace = true }
+thiserror = { workspace = true }
