@@ -13,4 +13,3 @@ Repo-specific rules; AGENTS.md includes this file.
 - Never-crash rule: no `unwrap`/`expect`/`panic!`/indexing on input-derived numbers outside tests
   (workspace clippy lints deny them). Implementation lands directly on `master` in verified slices.
 - Plans live in `.agents/plans/<name>.md`; decisions in `.agents/decisions.md`.
-

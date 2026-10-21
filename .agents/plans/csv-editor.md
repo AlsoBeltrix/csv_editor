@@ -126,4 +126,3 @@ UI behaviour that can be tested headlessly uses `egui_kittest` (as GridCraft doe
 
 Formulas, number formats, cell styling, charts, XLSX, multi-sheet, per-cell quote preservation,
 web/wasm build, installer. Any of these is a new plan.
-

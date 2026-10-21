@@ -358,8 +358,8 @@ mod tests {
         assert_eq!(current_region(&t, CellRef::new(3, 3)), Range::new(CellRef::new(1, 1), CellRef::new(4, 3)));
         // An empty cell touching a block (diagonally counts) selects the block, as Ctrl+A does.
         assert_eq!(current_region(&t, CellRef::new(0, 0)), Range::new(CellRef::new(0, 0), CellRef::new(2, 2)));
-        assert_eq!(current_region(&t, CellRef::new(0, 3)), Range::new(CellRef::new(0, 1), CellRef::new(4, 3)));
+        // ...but an empty row in between is a boundary: row 4 is not reached from row 0.
+        assert_eq!(current_region(&t, CellRef::new(0, 3)), Range::new(CellRef::new(0, 1), CellRef::new(2, 3)));
         assert_eq!(current_region(&t, CellRef::new(40, 40)), Range::cell(CellRef::new(40, 40)));
     }
 }
-
