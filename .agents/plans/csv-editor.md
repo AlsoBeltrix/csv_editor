@@ -239,6 +239,15 @@ Causes and fixes, one commit each:
   Trim and case changes test whether a cell would change before building a string.
 - The filter lowercased the needle and every cell on every row. The needle is prepared once;
   ASCII cells are compared without allocation.
+- Found on the way: a widening row insert was not exactly invertible (removing the rows did not
+  narrow the table). `Edit::SetWidth` rides along in the inverse; the random undo test, which
+  now logs the sequence it fails on, caught it.
+
+After (same file, release): sort by text 0.84 s, by number 0.83 s; undo of the replace-all and
+of a cleanup 0.00 s and 0.13 s; upper case over 5.4 M cells 0.75 s with no measurable memory
+growth; trim with nothing to trim 0.09 s; "contains" filter over a column 0.09 s for an ASCII
+needle (about the same as before for a non-ASCII one, which still lowercases). Remove
+duplicates is 1.7 s on 1.36 M rows (hashing every cell) and was left alone.
 
 ## Follow-ups (not started)
 

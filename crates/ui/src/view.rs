@@ -56,18 +56,52 @@ pub struct Filter {
 
 impl Filter {
     pub fn passes(&self, cell: &str) -> bool {
-        match self.kind {
-            FilterKind::Blank => cell.trim().is_empty(),
-            FilterKind::NotBlank => !cell.trim().is_empty(),
-            FilterKind::Contains => cell.to_lowercase().contains(&self.text.to_lowercase()),
-            FilterKind::NotContains => !cell.to_lowercase().contains(&self.text.to_lowercase()),
-            FilterKind::Equals => cell.trim().to_lowercase() == self.text.trim().to_lowercase(),
-        }
+        self.prepared().passes(cell)
+    }
+
+    /// The filter with its needle lowercased once, for a pass over many rows.
+    pub fn prepared(&self) -> Prepared<'_> {
+        Prepared { filter: self, needle: self.text.trim().to_lowercase() }
     }
 
     pub fn describe(&self) -> String {
         if self.kind.takes_text() { format!("{} \"{}\"", self.kind.label(), self.text) } else { self.kind.label().to_string() }
     }
+}
+
+/// A filter ready to test rows: the needle is lowercased once, and ASCII cells (most of them)
+/// are compared without allocating. A filter runs over every row after every edit, so this is
+/// what keeps editing a filtered large file smooth.
+pub struct Prepared<'a> {
+    filter: &'a Filter,
+    needle: String,
+}
+
+impl Prepared<'_> {
+    pub fn passes(&self, cell: &str) -> bool {
+        match self.filter.kind {
+            FilterKind::Blank => cell.trim().is_empty(),
+            FilterKind::NotBlank => !cell.trim().is_empty(),
+            FilterKind::Contains => contains_ci(cell, &self.needle),
+            FilterKind::NotContains => !contains_ci(cell, &self.needle),
+            FilterKind::Equals => equals_ci(cell.trim(), &self.needle),
+        }
+    }
+}
+
+/// Whether `text` contains `needle_lower` (already lowercased), ignoring case.
+fn contains_ci(text: &str, needle_lower: &str) -> bool {
+    if text.is_ascii() && needle_lower.is_ascii() {
+        let n = needle_lower.len();
+        n == 0 || text.as_bytes().windows(n).any(|w| w.eq_ignore_ascii_case(needle_lower.as_bytes()))
+    } else {
+        text.to_lowercase().contains(needle_lower)
+    }
+}
+
+/// Whether `text` is `needle_lower` (already lowercased), ignoring case.
+fn equals_ci(text: &str, needle_lower: &str) -> bool {
+    if text.is_ascii() && needle_lower.is_ascii() { text.eq_ignore_ascii_case(needle_lower) } else { text.to_lowercase() == needle_lower }
 }
 
 pub struct DocView {
@@ -205,7 +239,8 @@ impl DocView {
         let table = &self.doc.table;
         let start = self.data_start().min(table.row_count());
         let mut rows: Vec<usize> = (0..start).collect();
-        rows.extend((start..table.row_count()).filter(|&r| self.filters.iter().all(|f| f.passes(table.get(r, f.col)))));
+        let prepared: Vec<(usize, Prepared<'_>)> = self.filters.iter().map(|f| (f.col, f.prepared())).collect();
+        rows.extend((start..table.row_count()).filter(|&r| prepared.iter().all(|(col, f)| f.passes(table.get(r, *col)))));
         self.visible = Some(Rc::new(rows));
         self.visible_key = key;
     }
@@ -304,6 +339,12 @@ mod tests {
         assert!(!f(FilterKind::Equals, "Oslo").passes("Oslo city"));
         assert!(f(FilterKind::Blank, "").passes("  ") && !f(FilterKind::Blank, "").passes("x"));
         assert!(f(FilterKind::NotBlank, "").passes("x"));
+        // Non-ASCII goes through the lowercase path; ASCII through the byte path.
+        assert!(f(FilterKind::Contains, "ZÜRICH").passes("in zürich"));
+        assert!(f(FilterKind::Equals, "zürich").passes(" Zürich "));
+        assert!(!f(FilterKind::Contains, "zürich").passes("zurich"));
+        assert!(f(FilterKind::Contains, "").passes("anything"));
+        assert!(!f(FilterKind::Contains, "longer than the cell").passes("short"));
         assert_eq!(f(FilterKind::Contains, "a").describe(), "contains \"a\"");
         assert_eq!(f(FilterKind::Blank, "").describe(), "is blank");
     }

@@ -45,8 +45,13 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
   The owner built and ran the app on Linux (AMD Radeon RX 9070 XT, Mesa OpenGL 4.6) and macOS
   on 2026-10-22: grid, menus, dialect badge and saving work on both (`tests/*screenshot1.png`,
   `tests/*_test.csv` are the owner's evidence).
-  Next action: owner re-tests Windows on OpenGL (`cargo run --release -p csv-editor --
-  <file.csv>`); further optimization candidates are the follow-ups at the end of the plan.
+  Windows re-tested on OpenGL by the owner 2026-10-22, fine.
+  Slice 11 (owner go 2026-10-22): data operations at scale — width rescan only on shrink, sort
+  without per-comparison allocation (3.4/10.9 s → 0.8 s), one sparse `Edit::SetCells` per
+  cleanup or replace-all (undo of a 5.4 M-cell cleanup now 0.13 s, used to never finish),
+  allocation-free ASCII filter matching, plus `Edit::SetWidth` for exact undo of widening row
+  inserts. Benchmark: `crates/table/examples/ops_bench.rs`.
+  Next action: owner re-tests; remaining candidates are the follow-ups at the end of the plan.
   Settled 2026-10-22: new documents default to CRLF on every platform (RFC 4180; decisions.md).
 
 ## Facts
