@@ -42,8 +42,12 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
   Slice 10 (owner decision 2026-10-22, "this shouldn't use directx"): Windows renders through
   wgpu's OpenGL backend, DirectX 12 code removed; app peak 471 MB on the 100 MB file, 94 MB
   private with a tiny file. Decision recorded in `.agents/decisions.md`.
-  Next action: owner re-tests on OpenGL (`cargo run --release -p csv-editor -- <file.csv>`);
-  further optimization candidates are the follow-ups at the end of the plan.
+  The owner built and ran the app on Linux (AMD Radeon RX 9070 XT, Mesa OpenGL 4.6) and macOS
+  on 2026-10-22: grid, menus, dialect badge and saving work on both (`tests/*screenshot1.png`,
+  `tests/*_test.csv` are the owner's evidence).
+  Next action: owner re-tests Windows on OpenGL (`cargo run --release -p csv-editor --
+  <file.csv>`); further optimization candidates are the follow-ups at the end of the plan.
+  Open question for the owner: new documents default to CRLF on every platform.
 
 ## Facts
 
