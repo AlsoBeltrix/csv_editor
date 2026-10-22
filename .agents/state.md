@@ -39,8 +39,11 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
   memory-usage hint (DirectX 12 heaps on an integrated GPU were 290 MB of the process), cells
   packed to 24 bytes (quote flag as the first byte of the cell's string). 100 MB soak: open
   0.45 s, save 0.22 s, app peak 524 MB (was 837), 200 MB with a tiny file (was 443).
-  Next action: owner re-tests; further optimization candidates are the follow-ups at the end of
-  the plan (parallel parse, lazy CJK fonts).
+  Slice 10 (owner decision 2026-10-22, "this shouldn't use directx"): Windows renders through
+  wgpu's OpenGL backend, DirectX 12 code removed; app peak 471 MB on the 100 MB file, 94 MB
+  private with a tiny file. Decision recorded in `.agents/decisions.md`.
+  Next action: owner re-tests on OpenGL (`cargo run --release -p csv-editor -- <file.csv>`);
+  further optimization candidates are the follow-ups at the end of the plan.
 
 ## Facts
 
@@ -50,7 +53,9 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
 - Build timings on this machine as of the slice-1 commit: cold workspace build ~6 min,
   incremental ~1 min. A second target dir (`target-table/`, gitignored) runs table tests while
   the main one is busy.
-- First-run GPU: Intel integrated, DirectX 12 chosen by the probe.
+- GPU here: Intel integrated. Windows draws through OpenGL (wgpu GL backend); DirectX is out
+  by decision. Capturing the live window from outside works with `PrintWindow`
+  (`PW_RENDERFULLCONTENT`); `CopyFromScreen` returns black for this window.
 - egui 0.37's default features do not include `default_fonts`; the workspace egui dependency
   enables it, otherwise text panics in tests of the UI crate alone.
 - Widgets that must not take keyboard focus (scrollbars) use `Sense::CLICK | Sense::DRAG`, not

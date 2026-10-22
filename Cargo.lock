@@ -754,7 +754,6 @@ dependencies = [
  "env_logger",
  "image",
  "log",
- "pollster 1.0.1",
  "rfd",
  "serde",
  "serde_json",

@@ -25,7 +25,8 @@ Large-file soak (this machine, Intel integrated GPU): a 100.3 MB, 1,357,661-row 
 opened in 0.70 s (release) / 1.15 s (dev profile) with a peak working set of 702 MB / 831 MB. The
 release executable is 16.3 MB. After the per-cell quote flag (cells 24 → 32 bytes): 0.58 s and
 765 MB in release. After slice 9 (measured with a poller of the peak working set, which reads
-higher than the earlier method): 0.45 s open, 0.22 s save, 524 MB peak; see slice 9.
+higher than the earlier method): 0.45 s open, 0.22 s save, 524 MB peak; see slice 9. On OpenGL
+(slice 10): 471 MB.
 
 ## Goal
 
@@ -205,6 +206,20 @@ and `Row = Vec<Cell>` is untouched (the flag was read at four places outside the
 file: table 381 → 298 MB; soak example peak 488 → 405 MB; app peak 607 → 524 MB. Building each
 cell as prefix plus text costs about 30 ms on the open (0.42 → 0.45 s, within run-to-run noise).
 A size test pins the 24 bytes.
+
+## Slice 10: no DirectX (owner decision 2026-10-22, `.agents/decisions.md`)
+
+Windows now draws through wgpu's OpenGL backend; the DirectX 12 probe, DirectX-first choice,
+OpenGL/DirectX retry and FXC pin are gone from `graphics.rs`, and `pollster` with them. Vulkan
+stays excluded on Windows. Other platforms keep wgpu's default (Metal, Vulkan). Checked before
+switching: a `PrintWindow` capture of the live window on both backends (identical grid), the
+100 MB file, and the headless screenshot aid, which on OpenGL needs frames to keep coming until
+the read-back callback runs (`screenshot_pending` in `main.rs`; it used to hang there).
+
+Memory on the 20 KB file: private 94 MB (DirectX 12 after the memory hint: 201 MB). On the
+100 MB file: app peak 471 MB working set / 422 MB private (DirectX 12: 524 MB). Consequence
+accepted with the decision: a Windows machine with no OpenGL driver gets a start-up error
+instead of DirectX 12's software rasteriser.
 
 ## Follow-ups (not started)
 

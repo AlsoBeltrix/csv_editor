@@ -3,11 +3,12 @@
 //! Usage: `csv-editor [files…]`
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
-#[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod prefs;
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use csv_editor_ui::{EditorApp, Services};
 
@@ -19,6 +20,9 @@ struct App {
     /// `CSV_EDITOR_SCREENSHOT=<file.png>`: save the window after a few frames and quit. A
     /// development aid for looking at the interface without a person at the screen.
     screenshot: Option<PathBuf>,
+    /// A screenshot was requested and its callback has not run yet. The read-back completes on
+    /// a later frame on some backends (OpenGL), so frames keep coming until it does.
+    screenshot_pending: Arc<AtomicBool>,
 }
 
 impl eframe::App for App {
@@ -35,16 +39,19 @@ impl eframe::App for App {
             && let Some(path) = self.screenshot.take()
         {
             let done = ctx.clone();
+            let pending = Arc::clone(&self.screenshot_pending);
+            pending.store(true, Ordering::Relaxed);
             ctx.request_screenshot(move |img| {
                 let (w, h) = (img.width() as u32, img.height() as u32);
                 match image::save_buffer(&path, img.as_raw(), w, h, image::ColorType::Rgba8) {
                     Ok(()) => log::info!("screenshot saved to {}", path.display()),
                     Err(e) => log::error!("screenshot {}: {e}", path.display()),
                 }
+                pending.store(false, Ordering::Relaxed);
                 done.send_viewport_cmd(egui::ViewportCommand::Close);
             });
         }
-        if self.screenshot.is_some() {
+        if self.screenshot.is_some() || self.screenshot_pending.load(Ordering::Relaxed) {
             ctx.request_repaint();
         }
     }
@@ -114,46 +121,19 @@ fn main() -> eframe::Result {
         .with_min_inner_size([560.0, 360.0])
         .with_app_id("csv-editor")
         .with_drag_and_drop(true);
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
-    // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
-    // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
-    #[cfg(target_os = "windows")]
-    let backend_override = eframe::wgpu::Backends::from_env();
-    #[cfg(target_os = "windows")]
-    let (options, first_backends) = {
-        let mut options = options;
-        let backends = graphics::configure(&mut options, backend_override);
-        (options, backends)
-    };
-    #[cfg(target_os = "windows")]
-    let retry_options = options.clone();
-    // The app waits here until a start gets as far as creating it; a start that fails before
-    // (no graphics adapter, device or surface) leaves it here for the next attempt.
-    let pending = std::cell::Cell::new(Some(app));
-    let run = |options: eframe::NativeOptions| {
-        eframe::run_native(
-            "csv-editor",
-            options,
-            Box::new(|_cc| {
-                let Some(app) = pending.take() else {
-                    return Err("the app was already created".into());
-                };
-                Ok(Box::new(App { editor: app, frames: 0, window: None, screenshot: std::env::var_os("CSV_EDITOR_SCREENSHOT").map(PathBuf::from) }))
-            }),
-        )
-    };
-    let result = run(options);
-    // A graphics error before the app existed: start once more with the other backend.
-    #[cfg(target_os = "windows")]
-    if let Err(eframe::Error::Wgpu(e)) = &result
-        && let Some(app) = pending.take()
-        && let Some(backends) = graphics::fallback_backends(backend_override, first_backends)
-    {
-        log::error!("graphics: the renderer didn't start on {first_backends:?} ({e}); trying {backends:?}");
-        pending.set(Some(app));
-        let mut options = retry_options;
-        graphics::configure_backends(&mut options, backends);
-        return run(options);
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
+    // Before eframe creates the wgpu instance: OpenGL on Windows, never DirectX or Vulkan unless
+    // asked (see graphics.rs).
+    match graphics::configure(&mut options, eframe::wgpu::Backends::from_env()) {
+        Some(backends) => log::info!("graphics: backends {backends:?}"),
+        None => log::info!("graphics: wgpu's default backends"),
     }
-    result
+    let screenshot = std::env::var_os("CSV_EDITOR_SCREENSHOT").map(PathBuf::from);
+    eframe::run_native(
+        "csv-editor",
+        options,
+        Box::new(move |_cc| {
+            Ok(Box::new(App { editor: app, frames: 0, window: None, screenshot, screenshot_pending: Arc::new(AtomicBool::new(false)) }))
+        }),
+    )
 }

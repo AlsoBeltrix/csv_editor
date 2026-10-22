@@ -12,4 +12,6 @@ Repo-specific rules; AGENTS.md includes this file.
   `cargo test --workspace`. UI changes also get a smoke launch of `target\debug\csv-editor.exe`.
 - Never-crash rule: no `unwrap`/`expect`/`panic!`/indexing on input-derived numbers outside tests
   (workspace clippy lints deny them). Implementation lands directly on `master` in verified slices.
+- Renderer: eframe on wgpu. Windows draws through OpenGL and never DirectX (decision
+  2026-10-22, `.agents/decisions.md`); Vulkan only when `WGPU_BACKEND` asks.
 - Plans live in `.agents/plans/<name>.md`; decisions in `.agents/decisions.md`.
