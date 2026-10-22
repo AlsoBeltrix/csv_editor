@@ -1,7 +1,6 @@
-<!-- push-policy: ask -->
-Always ask before pushing.
+<!-- push-policy: always -->
+Always push after committing.
 
-This governs pushes the agent makes on its own initiative, after a commit.
-An explicit push the owner asks for — `git push`, or the `git` playbook's
-push operation — is already authorized by the request and executes without
-a confirmation prompt.
+Set by the owner on 2026-10-22 ("set the push policy to always"). Every commit the agent
+makes on `master` is pushed to `origin` right away, without a confirmation prompt. An explicit
+push the owner asks for is already authorized by the request.
