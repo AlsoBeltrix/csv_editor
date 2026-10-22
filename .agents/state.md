@@ -47,7 +47,7 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
   `tests/*_test.csv` are the owner's evidence).
   Next action: owner re-tests Windows on OpenGL (`cargo run --release -p csv-editor --
   <file.csv>`); further optimization candidates are the follow-ups at the end of the plan.
-  Open question for the owner: new documents default to CRLF on every platform.
+  Settled 2026-10-22: new documents default to CRLF on every platform (RFC 4180; decisions.md).
 
 ## Facts
 
