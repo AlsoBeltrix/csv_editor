@@ -22,70 +22,78 @@ pub struct SortSpec {
 }
 
 /// Natural, case-insensitive comparison: digit runs compare by value, the rest by characters.
+/// Allocation-free: a sort calls this tens of millions of times.
 pub fn natural_cmp(a: &str, b: &str) -> Ordering {
-    let mut ia = a.chars().peekable();
-    let mut ib = b.chars().peekable();
+    let (mut i, mut j) = (0usize, 0usize);
     loop {
-        match (ia.peek().copied(), ib.peek().copied()) {
+        let (ra, rb) = (a.get(i..).unwrap_or(""), b.get(j..).unwrap_or(""));
+        match (ra.chars().next(), rb.chars().next()) {
             (None, None) => return Ordering::Equal,
             (None, Some(_)) => return Ordering::Less,
             (Some(_), None) => return Ordering::Greater,
             (Some(ca), Some(cb)) if ca.is_ascii_digit() && cb.is_ascii_digit() => {
-                let mut na = String::new();
-                while let Some(c) = ia.peek().copied().filter(char::is_ascii_digit) {
-                    na.push(c);
-                    ia.next();
-                }
-                let mut nb = String::new();
-                while let Some(c) = ib.peek().copied().filter(char::is_ascii_digit) {
-                    nb.push(c);
-                    ib.next();
-                }
-                let (ta, tb) = (na.trim_start_matches('0'), nb.trim_start_matches('0'));
-                let ord = ta.len().cmp(&tb.len()).then_with(|| ta.cmp(tb)).then_with(|| na.len().cmp(&nb.len()));
+                let (da, db) = (digit_run(ra), digit_run(rb));
+                let (ta, tb) = (da.trim_start_matches('0'), db.trim_start_matches('0'));
+                let ord = ta.len().cmp(&tb.len()).then_with(|| ta.cmp(tb)).then_with(|| da.len().cmp(&db.len()));
                 if ord != Ordering::Equal {
                     return ord;
                 }
+                i += da.len();
+                j += db.len();
             }
             (Some(ca), Some(cb)) => {
-                ia.next();
-                ib.next();
-                let (la, lb) = (ca.to_lowercase().collect::<String>(), cb.to_lowercase().collect::<String>());
-                let ord = la.cmp(&lb);
-                if ord != Ordering::Equal {
-                    return ord;
+                i += ca.len_utf8();
+                j += cb.len_utf8();
+                if ca != cb {
+                    let ord = ca.to_lowercase().cmp(cb.to_lowercase());
+                    if ord != Ordering::Equal {
+                        return ord;
+                    }
                 }
             }
         }
     }
 }
 
+/// The leading run of ASCII digits.
+fn digit_run(s: &str) -> &str {
+    let end = s.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(s.len());
+    s.get(..end).unwrap_or("")
+}
+
 /// A cell's number for numeric sorting: plain decimals, with optional thousands commas and a
 /// percent sign; anything else is not a number.
 pub fn numeric_value(text: &str) -> Option<f64> {
     let s = text.trim().trim_end_matches('%');
-    let s: String = s.chars().filter(|c| *c != ',').collect();
-    if s.is_empty() || !s.bytes().next().is_some_and(|b| b.is_ascii_digit() || b == b'-' || b == b'+' || b == b'.') {
+    if !s.bytes().next().is_some_and(|b| b.is_ascii_digit() || b == b'-' || b == b'+' || b == b'.') {
         return None;
     }
-    s.parse::<f64>().ok().filter(|v| v.is_finite())
+    let parsed = if s.contains(',') { s.replace(',', "").parse::<f64>() } else { s.parse::<f64>() };
+    parsed.ok().filter(|v| v.is_finite())
 }
 
-fn compare(a: &str, b: &str, kind: SortKind) -> Ordering {
-    match (a.is_empty(), b.is_empty()) {
-        (true, true) => return Ordering::Equal,
-        (true, false) => return Ordering::Greater,
-        (false, true) => return Ordering::Less,
-        _ => {}
-    }
+/// What a row sorts by: its number when the column is numeric and the cell parses, else its
+/// text. Computed once per row, not once per comparison.
+#[derive(Clone, Copy)]
+enum Key<'a> {
+    Number(f64),
+    Text(&'a str),
+}
+
+fn key(text: &str, kind: SortKind) -> Key<'_> {
     match kind {
-        SortKind::Text => natural_cmp(a, b),
-        SortKind::Numeric => match (numeric_value(a), numeric_value(b)) {
-            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => natural_cmp(a, b),
-        },
+        SortKind::Numeric => numeric_value(text).map_or(Key::Text(text), Key::Number),
+        SortKind::Text => Key::Text(text),
+    }
+}
+
+/// Non-empty cells: numbers before text, numbers by value, text naturally.
+fn compare_keys(a: Key<'_>, b: Key<'_>) -> Ordering {
+    match (a, b) {
+        (Key::Number(x), Key::Number(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+        (Key::Number(_), Key::Text(_)) => Ordering::Less,
+        (Key::Text(_), Key::Number(_)) => Ordering::Greater,
+        (Key::Text(x), Key::Text(y)) => natural_cmp(x, y),
     }
 }
 
@@ -94,20 +102,26 @@ fn compare(a: &str, b: &str, kind: SortKind) -> Ordering {
 pub fn sort_permutation(table: &crate::table::Table, body_start: usize, spec: SortSpec) -> Vec<usize> {
     let rows = table.row_count();
     let body_start = body_start.min(rows);
-    let mut body: Vec<usize> = (body_start..rows).collect();
+    let keys: Vec<Option<Key<'_>>> = (body_start..rows)
+        .map(|r| {
+            let text = table.get(r, spec.col);
+            (!text.is_empty()).then(|| key(text, spec.kind))
+        })
+        .collect();
+    let mut body: Vec<usize> = (0..keys.len()).collect();
     body.sort_by(|&a, &b| {
-        let (ta, tb) = (table.get(a, spec.col), table.get(b, spec.col));
         // Empty cells stay last whatever the direction, so the direction flips only non-empty pairs.
-        match (ta.is_empty(), tb.is_empty()) {
-            (true, false) => Ordering::Greater,
-            (false, true) => Ordering::Less,
-            _ => {
-                let ord = compare(ta, tb, spec.kind);
+        match (keys.get(a).copied().flatten(), keys.get(b).copied().flatten()) {
+            (None, None) => Ordering::Equal,
+            (None, Some(_)) => Ordering::Greater,
+            (Some(_), None) => Ordering::Less,
+            (Some(ka), Some(kb)) => {
+                let ord = compare_keys(ka, kb);
                 if spec.ascending { ord } else { ord.reverse() }
             }
         }
     });
-    (0..body_start).chain(body).collect()
+    (0..body_start).chain(body.into_iter().map(|i| i + body_start)).collect()
 }
 
 impl Document {
