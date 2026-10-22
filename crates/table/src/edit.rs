@@ -26,6 +26,14 @@ pub enum Edit {
         cells: Vec<Row>,
         restore: Option<Restore>,
     },
+    /// New values for scattered existing cells, as `(row, col, cell)`. One vector for a whole
+    /// cleanup or replace-all, 40 bytes per change; a missing cell is skipped. Inverts to the
+    /// same variant holding the old values.
+    SetCells(Vec<(usize, usize, Cell)>),
+    /// Sets the table's width (never below the longest row). Inserted rows can widen the table;
+    /// removing them again does not narrow it, so the inverse of a widening insert carries one
+    /// of these.
+    SetWidth(usize),
     InsertRows {
         at: usize,
         rows: Vec<Row>,
@@ -77,6 +85,7 @@ impl Edit {
         match self {
             Edit::Nop => true,
             Edit::Batch(v) => v.iter().all(Edit::is_nop),
+            Edit::SetCells(v) => v.is_empty(),
             _ => false,
         }
     }
@@ -118,9 +127,32 @@ impl Edit {
                 }
                 Edit::SetRect { row, col, cells: old_cells, restore: Some(Restore { row_lens, width: old_width }) }
             }
+            Edit::SetCells(cells) => {
+                let mut old = Vec::with_capacity(cells.len());
+                for (r, c, cell) in cells {
+                    if t.has_cell(r, c)
+                        && let Some((previous, _)) = t.set(r, c, cell)
+                    {
+                        old.push((r, c, previous));
+                    }
+                }
+                // Undo in reverse so a cell named twice gets its first value back.
+                old.reverse();
+                if old.is_empty() { Edit::Nop } else { Edit::SetCells(old) }
+            }
+            Edit::SetWidth(width) => {
+                let old = t.width();
+                t.set_width(width);
+                if t.width() == old { Edit::Nop } else { Edit::SetWidth(old) }
+            }
             Edit::InsertRows { at, rows } => {
                 let count = rows.len();
-                if count > 0 && t.insert_rows(at, rows) { Edit::DeleteRows { at, count } } else { Edit::Nop }
+                let old_width = t.width();
+                if count == 0 || !t.insert_rows(at, rows) {
+                    return Edit::Nop;
+                }
+                let delete = Edit::DeleteRows { at, count };
+                if t.width() == old_width { delete } else { Edit::Batch(vec![delete, Edit::SetWidth(old_width)]) }
             }
             Edit::DeleteRows { at, count } => match t.remove_rows(at, count) {
                 Some(rows) if !rows.is_empty() => Edit::InsertRows { at, rows },
@@ -268,7 +300,11 @@ mod tests {
         roundtrip(&t, Edit::set_cell(1, 2, "pad"));
         roundtrip(&t, Edit::set_cell(1, 5, "wider"));
         roundtrip(&t, Edit::set_rect(0, 0, vec![vec![Cell::from("1"), Cell::from("2")], vec![Cell::from("3"), Cell::from("4")]]));
+        roundtrip(&t, Edit::SetCells(vec![(0, 2, Cell::from("Z")), (2, 0, Cell::from("Y")), (1, 0, Cell::from("X"))]));
+        roundtrip(&t, Edit::SetCells(vec![(0, 0, Cell::from("first")), (0, 0, Cell::from("second"))]));
         roundtrip(&t, Edit::InsertRows { at: 1, rows: vec![vec![Cell::from("new")]] });
+        roundtrip(&t, Edit::InsertRows { at: 3, rows: vec![vec![Cell::from("w"), Cell::from("i"), Cell::from("d"), Cell::from("e")]] });
+        roundtrip(&t, Edit::SetWidth(6));
         roundtrip(&t, Edit::DeleteRows { at: 0, count: 2 });
         roundtrip(&t, Edit::InsertCols { at: 1, count: 2, cells: None });
         roundtrip(&t, Edit::InsertCols { at: 3, count: 1, cells: None });
@@ -297,6 +333,10 @@ mod tests {
             Edit::Permute { perm: vec![1] },
             Edit::InsertRows { at: 0, rows: vec![] },
             Edit::Batch(vec![Edit::Nop]),
+            Edit::SetCells(vec![]),
+            Edit::SetWidth(1),
+            Edit::SetWidth(0),
+            Edit::SetCells(vec![(0, 3, Cell::from("beyond the row")), (7, 0, Cell::from("beyond the table"))]),
         ] {
             let mut work = t.clone();
             assert!(edit.clone().apply(&mut work).is_nop(), "{edit:?}");
@@ -343,12 +383,14 @@ mod tests {
         for _ in 0..200 {
             let mut t = original.clone();
             let mut h = History::default();
+            let mut log = Vec::new();
             let steps = 1 + rnd(12);
             for _ in 0..steps {
                 let rows = t.row_count();
                 let width = t.width();
-                let edit = match rnd(8) {
+                let edit = match rnd(9) {
                     0 => Edit::set_cell(rnd(rows + 1), rnd(width + 2), "x"),
+                    8 => Edit::SetCells((0..1 + rnd(3)).map(|_| (rnd(rows + 1), rnd(width + 1), Cell::from("s"))).collect()),
                     1 => Edit::InsertRows { at: rnd(rows + 1), rows: vec![vec![Cell::from("n")]; 1 + rnd(2)] },
                     2 => Edit::DeleteRows { at: rnd(rows + 1), count: 1 + rnd(2) },
                     3 => Edit::InsertCols { at: rnd(width + 1), count: 1 + rnd(2), cells: None },
@@ -361,11 +403,12 @@ mod tests {
                         Edit::Permute { perm }
                     }
                 };
+                log.push(format!("{edit:?}"));
                 h.apply(&mut t, "step", edit);
             }
             let applied = h.undo.len();
             while h.undo(&mut t).is_some() {}
-            assert_eq!(t, original, "after undoing {applied} edits");
+            assert_eq!(t, original, "after undoing {applied} edits: {log:#?}");
             while h.redo(&mut t).is_some() {}
             while h.undo(&mut t).is_some() {}
             assert_eq!(t, original, "after redoing and undoing {applied} edits again");

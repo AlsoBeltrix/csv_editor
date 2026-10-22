@@ -99,14 +99,14 @@ impl Document {
 
     /// Replaces every match in `scope` as one undo step. Returns the number of cells changed.
     pub fn replace_all(&mut self, m: &Matcher, replacement: &str, scope: Range, visible: &dyn Fn(usize) -> bool) -> usize {
-        let mut edits = Vec::new();
+        let mut changes = Vec::new();
         for c in walk(&self.table, scope, None, true, visible) {
             if let Some(text) = m.replace(self.table.get(c.row, c.col), replacement) {
-                edits.push(Edit::set_cell(c.row, c.col, Cell::from(text)));
+                changes.push((c.row, c.col, Cell::from(text)));
             }
         }
-        let n = edits.len();
-        if n > 0 && self.apply("Replace all", Edit::Batch(edits)) { n } else { 0 }
+        let n = changes.len();
+        if n > 0 && self.apply("Replace all", Edit::SetCells(changes)) { n } else { 0 }
     }
 }
 

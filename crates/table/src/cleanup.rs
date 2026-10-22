@@ -26,6 +26,18 @@ impl Case {
         }
     }
 
+    /// [`Case::apply`], or `None` when it would leave the text as it is. The cheap checks for
+    /// upper and lower case matter: a cleanup over millions of cells must not build a string
+    /// per cell to find out nothing changed.
+    pub fn apply_if_changed(self, s: &str) -> Option<String> {
+        let could_change = match self {
+            Case::Upper => s.chars().any(|c| c.is_lowercase()),
+            Case::Lower => s.chars().any(|c| c.is_uppercase()),
+            Case::Title => true,
+        };
+        could_change.then(|| self.apply(s)).filter(|new| new != s)
+    }
+
     pub fn apply(self, s: &str) -> String {
         match self {
             Case::Upper => s.to_uppercase(),
@@ -72,31 +84,35 @@ pub(crate) fn delete_rows_edits(mut rows: Vec<usize>) -> Vec<Edit> {
 }
 
 impl Document {
-    /// Rewrites every existing cell of `scope` with `f`, as one undo step named `label`. Returns
-    /// how many cells changed.
-    pub fn map_cells(&mut self, scope: Range, label: &str, f: impl Fn(&str) -> String) -> usize {
+    /// Rewrites every existing cell of `scope` with `f` (`None`: leave the cell alone), as one
+    /// undo step named `label`. Returns how many cells changed.
+    pub fn map_cells(&mut self, scope: Range, label: &str, f: impl Fn(&str) -> Option<String>) -> usize {
         let table = &self.table;
-        let mut edits = Vec::new();
+        let mut changes = Vec::new();
         for r in scope.rows().take_while(|&r| r < table.row_count()) {
             let Some(row) = table.row(r) else { break };
             for c in scope.cols().take_while(|&c| c < row.len()) {
                 let old = table.get(r, c);
-                let new = f(old);
-                if new != old {
-                    edits.push(Edit::set_cell(r, c, Cell::from(new)));
+                if let Some(new) = f(old)
+                    && new != old
+                {
+                    changes.push((r, c, Cell::from(new)));
                 }
             }
         }
-        let n = edits.len();
-        if n > 0 && self.apply(label, Edit::Batch(edits)) { n } else { 0 }
+        let n = changes.len();
+        if n > 0 && self.apply(label, Edit::SetCells(changes)) { n } else { 0 }
     }
 
     pub fn trim_whitespace(&mut self, scope: Range) -> usize {
-        self.map_cells(scope, "Trim whitespace", |s| s.trim().to_string())
+        self.map_cells(scope, "Trim whitespace", |s| {
+            let t = s.trim();
+            (t.len() != s.len()).then(|| t.to_string())
+        })
     }
 
     pub fn change_case(&mut self, scope: Range, case: Case) -> usize {
-        self.map_cells(scope, case.label(), |s| case.apply(s))
+        self.map_cells(scope, case.label(), |s| case.apply_if_changed(s))
     }
 
     /// Deletes body rows whose cells are all blank. Returns how many.
