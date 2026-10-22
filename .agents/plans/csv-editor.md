@@ -221,6 +221,25 @@ Memory on the 20 KB file: private 94 MB (DirectX 12 after the memory hint: 201 M
 accepted with the decision: a Windows machine with no OpenGL driver gets a start-up error
 instead of DirectX 12's software rasteriser.
 
+## Slice 11: data operations at scale (owner go 2026-10-22)
+
+Measured on the 100 MB soak file with `crates/table/examples/ops_bench.rs` (release) before the
+slice: sort by text 3.2 s, sort by number 9.8 s, undo of a 1,111-cell replace-all 4.1 s, undo of
+upper case over 5.4 M cells never finished (killed), upper case 4.5 s at a 1.1 GB peak, trim with
+nothing to trim 1.5 s, a "contains" filter 0.35 s per refresh.
+
+Causes and fixes, one commit each:
+- `Table::set_width` rescanned every row on every undone cell. It scans only when the width
+  could shrink.
+- Sort comparisons allocated (digit runs, lowercase characters, number parsing). Numbers are
+  parsed once per row before sorting; `natural_cmp` compares slices and iterators without
+  allocating.
+- Cleanup and replace-all built one `SetRect` edit per changed cell. `Edit::SetCells` holds all
+  changed cells of one operation in a single vector (40 bytes per change) and inverts in place.
+  Trim and case changes test whether a cell would change before building a string.
+- The filter lowercased the needle and every cell on every row. The needle is prepared once;
+  ASCII cells are compared without allocation.
+
 ## Follow-ups (not started)
 
 - Parse in parallel (split at record boundaries outside quotes) for files past a few hundred MB.

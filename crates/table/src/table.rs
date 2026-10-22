@@ -190,8 +190,15 @@ impl Table {
         }
     }
 
-    /// Sets the width. It never drops below the longest row.
+    /// Sets the width. It never drops below the longest row, so a request to shrink scans the
+    /// rows; a request at or above the current width (the usual case when an edit is undone)
+    /// costs nothing. Undo runs this once per edited cell, and the scan is what made undoing a
+    /// large cleanup take forever.
     pub fn set_width(&mut self, width: usize) {
+        if width >= self.width {
+            self.width = width;
+            return;
+        }
         let longest = self.rows.iter().map(Vec::len).max().unwrap_or(0);
         self.width = width.max(longest);
     }
@@ -336,6 +343,17 @@ pub(crate) fn table_of(rows: &[&[&str]]) -> Table {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_width_never_drops_below_the_longest_row() {
+        let mut t = table_of(&[&["a", "b", "c"], &["d"]]);
+        t.set_width(5);
+        assert_eq!(t.width(), 5);
+        t.set_width(1);
+        assert_eq!(t.width(), 3, "a shrink stops at the longest row");
+        t.set_width(3);
+        assert_eq!(t.width(), 3);
+    }
 
     #[test]
     fn a_cell_is_one_compact_string() {
