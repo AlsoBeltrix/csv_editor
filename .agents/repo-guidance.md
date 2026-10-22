@@ -2,7 +2,7 @@
 
 Repo-specific rules; AGENTS.md includes this file.
 
-- Integration branch: `master`. No remote yet.
+- Integration branch: `master`. Remote: `origin` = https://github.com/AlsoBeltrix/csv_editor.git (added by the owner 2026-10-22). Push policy: `.agents/push-policy.md` (ask).
 - Stack: Rust 2024, egui/eframe desktop app, Cargo workspace at the repo root (layers:
   `crates/table` → `crates/ui` → `apps/csv-editor`; nothing below `crates/ui` depends on egui). Code borrowed from GridCraft (`C:\Users\mcoelho\source\repos\gridcraft`, MIT OR Apache-2.0)
   is copied file-by-file with attribution in `ATTRIBUTION.md`; no path or git dependency on the

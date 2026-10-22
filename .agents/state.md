@@ -1,6 +1,6 @@
 # State
 
-Sole current-state entry point (AGENTS.md). Integration branch: `master` (no remote configured).
+Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed to `origin` (GitHub, AlsoBeltrix/csv_editor).
 
 ## Now
 
