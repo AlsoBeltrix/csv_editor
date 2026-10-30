@@ -7,7 +7,7 @@
 use csv_editor_table::{Case, Cell, CellRef, Range, Row, Selection, SortKind, SortSpec, io};
 use egui::{Button, Ui};
 
-use crate::grid::{self, Clip, GridState};
+use crate::grid::{self, Clip, Cut, GridState};
 use crate::view::DocView;
 
 /// The current range clipped to the table's extent, as cells (empty past short rows).
@@ -38,7 +38,7 @@ pub fn cut(grid: &mut GridState, view: &mut DocView, ctx: &egui::Context) -> boo
     copy(grid, view, ctx);
     let (range, _) = current_cells(view);
     if let Some(clip) = grid.clip.as_mut() {
-        clip.cut = Some(range);
+        clip.cut = Some(Cut { document: view.id.clone(), version: view.doc.history.version(), range });
     }
     true
 }
@@ -50,15 +50,19 @@ pub fn paste(grid: &mut GridState, view: &mut DocView, text: Option<String>) -> 
     let text = text.or_else(|| grid.paste_text.as_ref().and_then(|read| read()));
     let same = |a: &str, b: &str| a.replace("\r\n", "\n") == b.replace("\r\n", "\n");
     let (cells, cut) = match (&grid.clip, &text) {
-        (Some(clip), Some(t)) if same(&clip.text, t) => (clip.cells.clone(), clip.cut),
-        (Some(clip), None) => (clip.cells.clone(), clip.cut),
+        (Some(clip), Some(t)) if same(&clip.text, t) => (clip.cells.clone(), clip.cut.clone()),
+        (Some(clip), None) => (clip.cells.clone(), clip.cut.clone()),
         (_, Some(t)) => (io::parse_block(t), None),
         (None, None) => return false,
     };
+    let source = cut.as_ref().filter(|cut| cut.document == view.id && cut.version == view.doc.history.version());
     let target = view.sel.current();
-    match view.doc.paste(target, &cells, cut) {
+    match view.doc.paste(target, &cells, source.map(|cut| cut.range)) {
         Some(r) => {
             view.sel = Selection::range(r);
+            if cut.is_some() && source.is_none() {
+                grid.note = Some("Pasted a copy; the cut source is in another document or has changed.".to_string());
+            }
             if cut.is_some()
                 && let Some(clip) = grid.clip.as_mut()
             {

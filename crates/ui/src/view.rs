@@ -19,6 +19,24 @@ pub const EXTRA_ROWS: usize = 30;
 /// Blank columns kept past the table's last column.
 pub const EXTRA_COLS: usize = 5;
 
+/// An identity that survives tab reordering and cannot be reused while a clipboard holds it.
+#[derive(Clone, Debug)]
+pub(crate) struct DocumentId(Rc<()>);
+
+impl DocumentId {
+    fn new() -> Self {
+        Self(Rc::new(()))
+    }
+}
+
+impl PartialEq for DocumentId {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for DocumentId {}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilterKind {
     Contains,
@@ -105,6 +123,7 @@ fn equals_ci(text: &str, needle_lower: &str) -> bool {
 }
 
 pub struct DocView {
+    pub(crate) id: DocumentId,
     pub doc: Document,
     pub sel: Selection,
     /// The display row shown at the top of the scrolling body (0 = the first row).
@@ -129,6 +148,7 @@ pub struct DocView {
 impl DocView {
     pub fn new(doc: Document) -> DocView {
         DocView {
+            id: DocumentId::new(),
             doc,
             sel: Selection::default(),
             scroll: 0,

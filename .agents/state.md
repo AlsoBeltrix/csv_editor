@@ -8,8 +8,8 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
   "plan then fix". The owner requested other issues be found before more manual
   testing. Seven additional functional defect groups have ten failing diagnostic
   reproductions, including wrong-document writes and close/cut/selection data-loss
-  paths. Accessible labeling, document transitions and close protection are verified;
-  all 95 tests, fmt, clippy, build and Windows debug smoke pass. Remaining repairs and
+  paths. Accessible labeling, document transitions, close protection and cut ownership
+  are verified; all 98 tests, fmt, clippy, build and Windows debug smoke pass. Remaining repairs and
   verification receipts: [repair plan](plans/pre-retest-fixes.md).
   Original findings: [workflow audit](reviews/2026-10-30-workflows.md).
   Next step: implement and verify [the repair plan](plans/pre-retest-fixes.md), which also includes

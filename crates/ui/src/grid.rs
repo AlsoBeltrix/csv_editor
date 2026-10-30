@@ -15,7 +15,7 @@ use egui::{
 
 use crate::EditorApp;
 use crate::theme::{self, Tokens};
-use crate::view::DocView;
+use crate::view::{DocView, DocumentId};
 
 pub const SCROLLBAR: f32 = 12.0;
 const RESIZE_GRIP: f32 = 4.0;
@@ -74,8 +74,15 @@ pub struct Clip {
     /// The block as tab-separated text, as handed to the system clipboard.
     pub text: String,
     pub cells: Vec<Row>,
-    /// The source range of a cut, emptied when the block is pasted.
-    pub cut: Option<Range>,
+    /// The source of a cut, emptied only when pasted into the unchanged source document.
+    pub cut: Option<Cut>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cut {
+    pub(crate) document: DocumentId,
+    pub(crate) version: u64,
+    pub(crate) range: Range,
 }
 
 /// Text being typed into a cell.
