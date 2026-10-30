@@ -4,6 +4,16 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
 
 ## Now
 
+- **Pre-retest workflow repairs — approved and in progress 2026-10-30.** Owner go:
+  "plan then fix". The owner requested other issues be found before more manual
+  testing. Seven additional functional defect groups have ten failing diagnostic
+  reproductions, including wrong-document writes and close/cut/selection data-loss
+  paths; an unnamed cell editor also fails the accessibility check. Baseline fmt,
+  clippy, all 86 tests, build and Windows debug smoke pass. Application source is
+  unchanged. Findings and limits: [workflow audit](reviews/2026-10-30-workflows.md).
+  Next step: implement and verify [the repair plan](plans/pre-retest-fixes.md), which also includes
+  the previously diagnosed [native clipboard omission](plans/system-clipboard.md).
+
 - **CSV editor — plan implemented, accepted by the owner 2026-10-21 ("good enough")**
   (`.agents/plans/csv-editor.md`,
   approved 2026-10-21). Slices 1–8 landed 2026-10-21: Cargo workspace (`crates/table`, `crates/ui`,
