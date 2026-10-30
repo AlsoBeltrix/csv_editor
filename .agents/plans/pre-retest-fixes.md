@@ -57,6 +57,9 @@ Do not represent Windows/headless checks as Linux/macOS runtime verification.
 - Planning: finalized; baseline evidence is in the linked audit.
 - Accessible cell label: implemented. The permanent regression fails with the
   production change removed; all 87 tests, fmt, clippy and native debug smoke pass.
-- Functional repairs: pending.
+- F1: implemented; five document-transition regressions fail with the fix removed.
+  All 92 tests, fmt, clippy, build and native debug smoke pass. Edits commit to
+  their owner before switching/opening/creating/closing or saving another tab.
+- Remaining functional repairs: F2–F7 and native clipboard support.
 - Release build and native clipboard smoke: pending.
 - Commits and pushes: required for each verified slice.

@@ -107,16 +107,28 @@ impl EditorApp {
         self.docs.get_mut(self.active)
     }
 
+    fn commit_active_edit(&mut self) {
+        grid::commit_edit_in(&mut self.grid, self.docs.get_mut(self.active));
+    }
+
+    fn activate_document(&mut self, index: usize) {
+        if index < self.docs.len() {
+            self.commit_active_edit();
+            self.active = index;
+        }
+    }
+
     /// Opens a file in a new tab (or switches to it if it is already open). Errors go to a
     /// message box.
     pub fn open_path(&mut self, path: &Path) {
         if let Some(i) = self.docs.iter().position(|d| d.doc.path.as_deref() == Some(path)) {
-            self.active = i;
+            self.activate_document(i);
             return;
         }
         let started = std::time::Instant::now();
         match Document::open(path, &ParseOptions::default()) {
             Ok(doc) => {
+                self.commit_active_edit();
                 log::info!("opened {} ({} rows × {} columns) in {:.2?}", path.display(), doc.table.row_count(), doc.table.width(), started.elapsed());
                 if self.docs.len() == 1 && self.docs.first().is_some_and(DocView::is_blank) {
                     self.docs.clear();
@@ -137,13 +149,14 @@ impl EditorApp {
     }
 
     pub fn new_document(&mut self) {
+        self.commit_active_edit();
         self.docs.push(DocView::new(Document::new()));
         self.active = self.docs.len() - 1;
     }
 
     /// Closes a tab, asking first when it has unsaved changes.
     pub fn request_close(&mut self, index: usize) {
-        grid::commit_edit_in(&mut self.grid, self.docs.get_mut(index));
+        self.commit_active_edit();
         if self.docs.get(index).is_some_and(|d| d.doc.is_dirty()) {
             self.active = index;
             self.prompt = Some(Prompt::Close(index));
@@ -154,8 +167,13 @@ impl EditorApp {
 
     /// Closes a tab without asking. There is always at least one document.
     pub fn close_document(&mut self, index: usize) {
-        if index < self.docs.len() {
-            self.docs.remove(index);
+        if index >= self.docs.len() {
+            return;
+        }
+        self.commit_active_edit();
+        self.docs.remove(index);
+        if index < self.active {
+            self.active -= 1;
         }
         if self.docs.is_empty() {
             self.docs.push(DocView::new(Document::new()));
@@ -172,7 +190,7 @@ impl EditorApp {
 
     /// Saves the document to its file, or asks where. Returns whether it was saved.
     pub fn save(&mut self, index: usize) -> bool {
-        grid::commit_edit_in(&mut self.grid, self.docs.get_mut(index));
+        self.commit_active_edit();
         match self.docs.get(index).and_then(|d| d.doc.path.clone()) {
             Some(path) => self.write_to(index, &path),
             None => self.save_as(index),
@@ -180,7 +198,7 @@ impl EditorApp {
     }
 
     pub fn save_as(&mut self, index: usize) -> bool {
-        grid::commit_edit_in(&mut self.grid, self.docs.get_mut(index));
+        self.commit_active_edit();
         let Some(view) = self.docs.get(index) else { return false };
         let name = view.doc.display_name();
         let suggested = if Path::new(&name).extension().is_some() { name } else { format!("{name}.csv") };
@@ -288,7 +306,7 @@ impl EditorApp {
             && let Some(i) = self.docs.iter().position(|d| d.doc.is_dirty())
         {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-            self.active = i;
+            self.activate_document(i);
             self.prompt = Some(Prompt::Quit);
         }
         let title = match self.active_view() {
@@ -496,12 +514,13 @@ impl EditorApp {
 
     fn tabs(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         let mut close = None;
+        let mut activate = None;
         ui.horizontal(|ui| {
             for (i, view) in self.docs.iter().enumerate() {
                 let label = format!("{}{}", view.doc.display_name(), if view.doc.is_dirty() { " •" } else { "" });
                 let resp = ui.selectable_label(i == self.active, label);
                 if resp.clicked() {
-                    self.active = i;
+                    activate = Some(i);
                 }
                 if resp.middle_clicked() || ui.add(egui::Button::new("×").frame(false).small()).clicked() {
                     close = Some(i);
@@ -511,6 +530,9 @@ impl EditorApp {
                 ui.add_space(4.0);
             }
         });
+        if let Some(i) = activate {
+            self.activate_document(i);
+        }
         if let Some(i) = close {
             self.request_close(i);
         }
@@ -636,7 +658,7 @@ impl EditorApp {
                     view.doc.history.mark_saved();
                 }
                 match self.docs.iter().position(|d| d.doc.is_dirty()) {
-                    Some(next) => self.active = next,
+                    Some(next) => self.activate_document(next),
                     None => {
                         self.prompt = None;
                         self.quit_confirmed = true;
