@@ -9,7 +9,7 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
   testing. Seven additional functional defect groups have ten failing diagnostic
   reproductions, including wrong-document writes and close/cut/selection data-loss
   paths. Accessible labeling, document transitions, close protection, cut ownership
-  and exact selection scopes are verified; all 102 tests, fmt, clippy, build and Windows
+  exact selection scopes and active-cell save shortcuts are verified; all 105 tests, fmt, clippy, build and Windows
   debug smoke pass. Remaining repairs and
   verification receipts: [repair plan](plans/pre-retest-fixes.md).
   Original findings: [workflow audit](reviews/2026-10-30-workflows.md).

@@ -297,6 +297,14 @@ impl EditorApp {
                 self.find.close();
             }
         }
+        if !dialog_open {
+            // Saving commits the active cell too. Text-edit undo remains owned by TextEdit.
+            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::S)) {
+                self.save_as(self.active);
+            } else if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::S)) {
+                self.save(self.active);
+            }
+        }
         if !dialog_open && self.grid.editor.is_none() {
             self.shortcuts(ctx);
         }
@@ -321,16 +329,10 @@ impl EditorApp {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        let app_keys: [(Modifiers, Key, fn(&mut EditorApp)); 9] = [
+        let app_keys: [(Modifiers, Key, fn(&mut EditorApp)); 7] = [
             (Modifiers::COMMAND, Key::O, |a| a.open_dialog()),
             (Modifiers::COMMAND, Key::N, |a| a.new_document()),
             (Modifiers::COMMAND, Key::W, |a| a.request_close(a.active)),
-            (Modifiers::COMMAND, Key::S, |a| {
-                a.save(a.active);
-            }),
-            (Modifiers::COMMAND | Modifiers::SHIFT, Key::S, |a| {
-                a.save_as(a.active);
-            }),
             (Modifiers::COMMAND, Key::Equals, |a| a.grid.zoom_step(1)),
             (Modifiers::COMMAND, Key::Plus, |a| a.grid.zoom_step(1)),
             (Modifiers::COMMAND, Key::Minus, |a| a.grid.zoom_step(-1)),

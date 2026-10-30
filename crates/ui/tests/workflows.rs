@@ -3,7 +3,7 @@
 
 use csv_editor_table::{Case, CellRef, Document, ParseOptions, Range, Selection};
 use csv_editor_ui::{DocView, EditorApp, Filter, FilterKind, Services, find::Scope, ops};
-use egui::{Event, Modifiers, PointerButton, ViewportCommand, ViewportEvent, ViewportId, vec2};
+use egui::{Event, Key, Modifiers, PointerButton, ViewportCommand, ViewportEvent, ViewportId, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
 fn view(text: &str) -> DocView {
@@ -347,4 +347,63 @@ fn selection_scope_replace_skips_filtered_rows_and_overlaps() {
     assert_eq!(String::from_utf8(a.docs[0].doc.to_bytes().0).unwrap(), "keep,xx,xx\r\nhide,x,x\r\n");
     a.docs[0].doc.undo();
     assert_eq!(String::from_utf8(a.docs[0].doc.to_bytes().0).unwrap(), "keep,x,x\r\nhide,x,x\r\n");
+}
+
+#[test]
+fn save_shortcut_commits_the_cell_and_writes_to_disk() {
+    let file = TempCsv::new("original\r\n");
+    let mut a = app("original\r\n");
+    a.docs[0].doc.path = Some(file.0.clone());
+    let mut h = harness(a);
+    type_text(&mut h, "unsaved");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.step();
+    h.run();
+    assert_eq!(std::fs::read_to_string(&file.0).unwrap(), "unsaved\r\n");
+    assert!(h.state().grid.editor.is_none());
+    assert!(!h.state().docs[0].doc.is_dirty());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.step();
+    h.run();
+    assert_eq!(h.state().docs[0].doc.table.get(0, 0), "original");
+    assert!(h.state().docs[0].doc.is_dirty());
+}
+
+#[test]
+fn save_shortcut_save_as_uses_the_picker_while_editing() {
+    let original = TempCsv::new("original\r\n");
+    let destination = TempCsv::new("placeholder\r\n");
+    let path = destination.0.clone();
+    let picked = std::rc::Rc::new(std::cell::Cell::new(0));
+    let calls = picked.clone();
+    let mut a = app("original\r\n");
+    a.docs[0].doc.path = Some(original.0.clone());
+    a.services.pick_save = Some(Box::new(move |_| {
+        calls.set(calls.get() + 1);
+        Some(path.clone())
+    }));
+    let mut h = harness(a);
+    type_text(&mut h, "save as");
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::S);
+    h.step();
+    h.run();
+    assert_eq!(picked.get(), 1);
+    assert_eq!(std::fs::read_to_string(&destination.0).unwrap(), "save as\r\n");
+    assert_eq!(std::fs::read_to_string(&original.0).unwrap(), "original\r\n");
+    assert_eq!(h.state().docs[0].doc.path.as_ref(), Some(&destination.0));
+    assert!(!h.state().docs[0].doc.is_dirty());
+}
+
+#[test]
+fn save_shortcut_cancelled_picker_preserves_unsaved_data() {
+    let mut a = app("original\r\n");
+    a.services.pick_save = Some(Box::new(|_| None));
+    let mut h = harness(a);
+    type_text(&mut h, "keep me");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.step();
+    h.run();
+    assert_eq!(h.state().docs[0].doc.table.get(0, 0), "keep me");
+    assert!(h.state().docs[0].doc.is_dirty());
+    assert!(h.state().docs[0].doc.path.is_none());
 }
