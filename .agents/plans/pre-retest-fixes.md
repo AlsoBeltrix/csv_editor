@@ -1,8 +1,9 @@
 # Plan: repair confirmed workflow defects before the next owner retest
 
-Status: approved 2026-10-30 by the owner ("plan then fix"); implementation in
-progress directly on `master`. Scope includes the seven functional findings,
-the accessible cell label, and native clipboard support. No pending owner decisions.
+Status: complete 2026-10-30. Approved by the owner ("plan then fix") and landed
+directly on `master`; all functional commits are pushed to `origin`. Scope includes
+the seven functional findings, accessible control labels, and native clipboard
+support. No pending implementation, merge, deletion or owner decisions.
 
 Canonical findings and reproduction evidence:
 [workflow audit](../reviews/2026-10-30-workflows.md).
@@ -87,5 +88,30 @@ Do not represent Windows/headless checks as Linux/macOS runtime verification.
   110 tests and the full verification entry point pass. The committed native
   Windows keyboard test fails on the old binary and passes on the rebuilt debug
   binary, covering external copy/paste, in-cell Save, cut/move/undo and save/reopen.
-- Release build and release native keyboard smoke: in progress.
-- Commits and pushes: required for each verified slice.
+- Release build and release native keyboard smoke: passed.
+- Commits and pushes: each functional slice landed and was pushed separately.
+
+## Completion receipt
+
+Implementation head: `45a3e71` (native clipboard support). Earlier functional
+commits: `34c68f5` (cell label), `c659ba3` (F1), `b2bc123` (F2), `35039a0` (F3),
+`c2545ca` (F4), `e907037` (F5), `d76c592` (F6), `b375ed7` (F7).
+
+All 110 tests pass, including 24 new permanent workflow regressions in
+`crates/ui/tests/workflows.rs`; the targeted cases were checked with their fixes
+removed. Formatting, workspace clippy with warnings denied, debug build and native
+OpenGL smoke passed. `cargo build --locked --release -p csv-editor` passed.
+
+Both debug and release executables passed:
+`powershell.exe -NoProfile -Sta -File tests/windows_clipboard.ps1`
+(with `-Executable target/release/csv-editor.exe` for release). This exercises real
+Windows Ctrl+V from external multiline TSV text, Ctrl+C to the system clipboard,
+Ctrl+S while editing, cut/paste, one-step Undo, saving, closing and reopening.
+The test failed at external paste before the clipboard feature was enabled.
+
+Release artifact: `target/release/csv-editor.exe`, 17,242,112 bytes.
+SHA-256: `982B6F717A7EE28F500161E6ED0B53F2379D29504815858BF15F378F50A76FFD`.
+Optional owner smoke: paste into a representative file, save, and reopen it.
+Cross-document or stale cuts intentionally paste copies with a status notice;
+unchanged same-document cuts remain one-step undoable moves. Linux/macOS runtime
+testing was not performed in this Windows session.

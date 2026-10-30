@@ -4,20 +4,14 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
 
 ## Now
 
-- **Pre-retest workflow repairs — approved and in progress 2026-10-30.** Owner go:
-  "plan then fix". The owner requested other issues be found before more manual
-  testing. Seven additional functional defect groups have ten failing diagnostic
-  reproductions, including wrong-document writes and close/cut/selection data-loss
-  paths. Accessible labeling, document transitions, close protection, cut ownership
-  exact selection scopes, active-cell save shortcuts, quit decisions, clipboard quote
-  preservation and native clipboard support are verified; all 110 tests, fmt,
-  clippy and build pass. Actual Windows Ctrl+C/X/V, active-edit Save, undo and
-  save/reopen pass on the debug app. Release build and release smoke remain.
-  Verification receipts:
-  verification receipts: [repair plan](plans/pre-retest-fixes.md).
-  Original findings: [workflow audit](reviews/2026-10-30-workflows.md).
-  Next step: finish release closeout in [the repair plan](plans/pre-retest-fixes.md), which also includes
-  the previously diagnosed [native clipboard omission](plans/system-clipboard.md).
+- **Workflow repairs complete 2026-10-30** (owner: "plan then fix"). Ctrl+V and
+  the seven additional functional findings are fixed and pushed to `master`.
+  All 110 tests and required checks pass; both debug and release executables pass
+  actual Windows clipboard/Save/Undo/save-reopen testing. Build receipt, individual
+  fixes, cut semantics and platform limits: [repair plan](plans/pre-retest-fixes.md).
+  Release: `target/release/csv-editor.exe`. Optional next step: owner pastes into
+  a representative file, saves and reopens it. No implementation work remains.
+  Original evidence: [workflow audit](reviews/2026-10-30-workflows.md).
 
 - **CSV editor — plan implemented, accepted by the owner 2026-10-21 ("good enough")**
   (`.agents/plans/csv-editor.md`,
