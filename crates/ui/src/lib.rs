@@ -27,12 +27,12 @@ pub struct Services {
 }
 
 /// A "save changes?" question and what happens once it is answered.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Prompt {
     /// Close this tab.
     Close(usize),
     /// Quit the application once every document is saved or abandoned.
-    Quit,
+    Quit { current: usize, discarded: Vec<usize> },
 }
 
 /// The whole interface. The platform shell (`apps/csv-editor`) owns the window and calls
@@ -315,7 +315,7 @@ impl EditorApp {
             } else if let Some(i) = self.docs.iter().position(|d| d.doc.is_dirty()) {
                 ctx.send_viewport_cmd(ViewportCommand::CancelClose);
                 self.activate_document(i);
-                self.prompt = Some(Prompt::Quit);
+                self.prompt = Some(Prompt::Quit { current: i, discarded: Vec::new() });
             }
         }
         let title = match self.active_view() {
@@ -595,10 +595,10 @@ impl EditorApp {
     }
 
     fn save_prompt(&mut self, ctx: &egui::Context) {
-        let Some(prompt) = self.prompt else { return };
-        let index = match prompt {
-            Prompt::Close(i) => i,
-            Prompt::Quit => self.active,
+        let Some(prompt) = self.prompt.clone() else { return };
+        let index = match &prompt {
+            Prompt::Close(i) => *i,
+            Prompt::Quit { current, .. } => *current,
         };
         let Some(name) = self.docs.get(index).map(|d| d.doc.display_name()) else {
             self.prompt = None;
@@ -654,14 +654,16 @@ impl EditorApp {
                 self.close_document(i);
                 self.prompt = None;
             }
-            Prompt::Quit => {
-                if answer == Answer::Discard
-                    && let Some(view) = self.docs.get_mut(index)
-                {
-                    view.doc.history.mark_saved();
+            Prompt::Quit { mut discarded, .. } => {
+                if answer == Answer::Discard {
+                    discarded.push(index);
                 }
-                match self.docs.iter().position(|d| d.doc.is_dirty()) {
-                    Some(next) => self.activate_document(next),
+                let next = self.docs.iter().enumerate().find(|(i, d)| !discarded.contains(i) && d.doc.is_dirty()).map(|(i, _)| i);
+                match next {
+                    Some(next) => {
+                        self.activate_document(next);
+                        self.prompt = Some(Prompt::Quit { current: next, discarded });
+                    }
                     None => {
                         self.prompt = None;
                         self.quit_confirmed = true;

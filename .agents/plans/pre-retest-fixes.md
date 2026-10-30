@@ -75,6 +75,10 @@ Do not represent Windows/headless checks as Linux/macOS runtime verification.
   undo. All 105 tests and the full entry point/debug smoke pass.
 - Native clipboard baseline: actual Windows Ctrl+V/Ctrl+S left the disposable
   file unchanged (`old,value`), confirming the omitted bridge beyond injected UI events.
-- Remaining functional repairs: F6–F7 and native clipboard support.
+- F6: implemented; all three quit-decision regressions fail with the fix removed.
+  Discard decisions live only in the current quit prompt, so dialect changes do
+  not loop and cancelling a multi-document quit preserves dirty state. All 108
+  tests and the full entry point/debug smoke pass.
+- Remaining functional repairs: F7 and native clipboard support.
 - Release build and native clipboard smoke: pending.
 - Commits and pushes: required for each verified slice.

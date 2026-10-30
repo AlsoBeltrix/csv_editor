@@ -407,3 +407,66 @@ fn save_shortcut_cancelled_picker_preserves_unsaved_data() {
     assert!(h.state().docs[0].doc.is_dirty());
     assert!(h.state().docs[0].doc.path.is_none());
 }
+
+fn click_and_observe_close(h: &mut Harness<'_, EditorApp>, label: &str) -> bool {
+    h.get_by_label(label).click();
+    let mut closing = false;
+    for _ in 0..8 {
+        h.step();
+        closing |= command(h, ViewportCommand::Close);
+    }
+    closing
+}
+
+#[test]
+fn quit_decision_discard_handles_dialect_changes() {
+    let mut a = app("a,b\r\n");
+    a.docs[0].doc.dialect.delimiter = b';';
+    let mut h = harness(a);
+    close_request(&mut h);
+    assert!(command(&h, ViewportCommand::CancelClose));
+    h.run();
+    assert!(click_and_observe_close(&mut h, "Don't save"));
+}
+
+#[test]
+fn quit_decision_cancel_preserves_dirty_state_of_previously_discarded_tabs() {
+    let mut a = app("first\r\n");
+    a.docs.push(view("second\r\n"));
+    a.docs[0].doc.set_cell(0, 0, "changed first");
+    a.docs[1].doc.set_cell(0, 0, "changed second");
+    let mut h = harness(a);
+    close_request(&mut h);
+    h.run();
+    assert!(!click_and_observe_close(&mut h, "Don't save"));
+    h.run();
+    assert_eq!(h.state().active, 1);
+    assert!(!click_and_observe_close(&mut h, "Cancel"));
+    h.run();
+    assert!(h.state().docs.iter().all(|v| v.doc.is_dirty()), "cancelling quit must not pretend either file was saved");
+    assert_eq!(h.state().docs[0].doc.table.get(0, 0), "changed first");
+    close_request(&mut h);
+    h.run();
+    assert_eq!(h.state().active, 0, "a fresh quit must ask about the first unsaved document again");
+}
+
+#[test]
+fn quit_decision_can_discard_one_document_and_save_the_other() {
+    let first = TempCsv::new("first\r\n");
+    let second = TempCsv::new("second\r\n");
+    let mut a = app("first\r\n");
+    a.docs[0].doc.path = Some(first.0.clone());
+    a.docs.push(view("second\r\n"));
+    a.docs[1].doc.path = Some(second.0.clone());
+    a.docs[0].doc.dialect.delimiter = b';';
+    a.docs[1].doc.set_cell(0, 0, "changed second");
+    let mut h = harness(a);
+    close_request(&mut h);
+    h.run();
+    assert!(!click_and_observe_close(&mut h, "Don't save"));
+    h.run();
+    assert_eq!(h.state().active, 1);
+    assert!(click_and_observe_close(&mut h, "Save"));
+    assert_eq!(std::fs::read_to_string(&first.0).unwrap(), "first\r\n");
+    assert_eq!(std::fs::read_to_string(&second.0).unwrap(), "changed second\r\n");
+}
