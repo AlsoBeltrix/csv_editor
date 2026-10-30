@@ -4,7 +4,7 @@
 //! Row and column operations act on exactly the rows (columns) that contain a selected cell,
 //! never on the gap between disconnected selections; the menu items say which ones.
 
-use csv_editor_table::{Case, Cell, CellRef, Range, Row, Selection, SortKind, SortSpec, io};
+use csv_editor_table::{Case, CellRef, Range, Row, Selection, SortKind, SortSpec, io};
 use egui::{Button, Ui};
 
 use crate::grid::{self, Clip, Cut, GridState};
@@ -19,7 +19,7 @@ fn current_cells(view: &DocView) -> (Range, Vec<Row>) {
         r.end.col.min(table.width().saturating_sub(1)).max(r.start.col),
     );
     let r = Range::new(r.start, end);
-    let rows = r.rows().map(|row| r.cols().map(|c| Cell::from(table.get(row, c))).collect()).collect();
+    let rows = r.rows().map(|row| r.cols().map(|c| table.row(row).and_then(|row| row.get(c)).cloned().unwrap_or_default()).collect()).collect();
     (r, rows)
 }
 

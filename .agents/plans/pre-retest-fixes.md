@@ -79,6 +79,10 @@ Do not represent Windows/headless checks as Linux/macOS runtime verification.
   Discard decisions live only in the current quit prompt, so dialect changes do
   not loop and cancelling a multi-document quit preserves dirty state. All 108
   tests and the full entry point/debug smoke pass.
-- Remaining functional repairs: F7 and native clipboard support.
+- F7: implemented; quote flags and serialized CSV bytes are preserved by internal
+  copy/cut, including normalized clipboard line endings. The regression fails
+  with the fix removed; the foreign-text control passes. All 110 tests and the
+  full entry point/debug smoke pass.
+- Remaining functional repair: native clipboard support.
 - Release build and native clipboard smoke: pending.
 - Commits and pushes: required for each verified slice.

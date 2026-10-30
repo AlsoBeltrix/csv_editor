@@ -470,3 +470,41 @@ fn quit_decision_can_discard_one_document_and_save_the_other() {
     assert_eq!(std::fs::read_to_string(&first.0).unwrap(), "first\r\n");
     assert_eq!(std::fs::read_to_string(&second.0).unwrap(), "changed second\r\n");
 }
+
+#[test]
+fn clipboard_quotes_copy_and_cut_preserve_cells_and_undo_exactly() {
+    let original = "\"001\",plain,\"two\r\nlines\"\r\n";
+    for cut in [false, true] {
+        let mut a = app(original);
+        let source = a.docs[0].doc.table.row(0).unwrap().to_vec();
+        assert!(source[0].quoted() && !source[1].quoted() && source[2].quoted());
+        a.docs[0].sel = Selection::range(Range::new(CellRef::new(0, 0), CellRef::new(0, 2)));
+        if cut {
+            ops::cut(&mut a.grid, &mut a.docs[0], &egui::Context::default());
+        } else {
+            ops::copy(&mut a.grid, &mut a.docs[0], &egui::Context::default());
+        }
+        // egui-winit normalizes clipboard line endings; exact internal cells must survive it.
+        let text = a.grid.clip.as_ref().unwrap().text.replace("\r\n", "\n");
+        a.docs[0].sel = Selection::at(CellRef::new(1, 0));
+        assert!(ops::paste(&mut a.grid, &mut a.docs[0], Some(text)));
+        let pasted = a.docs[0].doc.table.row(1).unwrap();
+        assert_eq!(pasted, source.as_slice());
+        // Cell equality intentionally compares text only, so check file metadata and bytes too.
+        assert!(pasted[0].quoted() && !pasted[1].quoted() && pasted[2].quoted());
+        assert_eq!(String::from_utf8(a.docs[0].doc.to_bytes().0).unwrap(), format!("{}{original}", if cut { ",,\r\n" } else { original }));
+        a.docs[0].doc.undo();
+        assert_eq!(String::from_utf8(a.docs[0].doc.to_bytes().0).unwrap(), original);
+        assert!(!a.docs[0].doc.is_dirty());
+    }
+}
+
+#[test]
+fn clipboard_quotes_foreign_text_does_not_inherit_file_quoting() {
+    let mut a = app("\"001\",plain\r\n");
+    ops::copy(&mut a.grid, &mut a.docs[0], &egui::Context::default());
+    a.docs[0].sel = Selection::at(CellRef::new(0, 1));
+    assert!(ops::paste(&mut a.grid, &mut a.docs[0], Some("\"002\"".into())));
+    assert_eq!(a.docs[0].doc.table.get(0, 1), "002");
+    assert!(!a.docs[0].doc.table.row(0).unwrap()[1].quoted());
+}
