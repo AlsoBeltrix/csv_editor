@@ -8,9 +8,10 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
   "plan then fix". The owner requested other issues be found before more manual
   testing. Seven additional functional defect groups have ten failing diagnostic
   reproductions, including wrong-document writes and close/cut/selection data-loss
-  paths; an unnamed cell editor also fails the accessibility check. Baseline fmt,
-  clippy, all 86 tests, build and Windows debug smoke pass. Application source is
-  unchanged. Findings and limits: [workflow audit](reviews/2026-10-30-workflows.md).
+  paths. The cell editor now has an accessible name; all 87 tests, fmt, clippy,
+  build and Windows debug smoke pass for that slice. Remaining repairs and
+  verification receipts: [repair plan](plans/pre-retest-fixes.md).
+  Original findings: [workflow audit](reviews/2026-10-30-workflows.md).
   Next step: implement and verify [the repair plan](plans/pre-retest-fixes.md), which also includes
   the previously diagnosed [native clipboard omission](plans/system-clipboard.md).
 

@@ -467,16 +467,18 @@ fn editor_ui(grid: &mut GridState, view: &mut DocView, ui: &mut egui::Ui, grid_r
             m.set_focus_lock_filter(editor_id, EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true });
         });
     }
-    let output = ui.put(
-        inner,
-        egui::TextEdit::multiline(&mut ed.text)
-            .id(editor_id)
-            .font(font)
-            .text_color(t.cell_text)
-            .frame(egui::Frame::NONE)
-            .desired_width(inner.width())
-            .lock_focus(true),
-    );
+    let output = ui
+        .put(
+            inner,
+            egui::TextEdit::multiline(&mut ed.text)
+                .id(editor_id)
+                .font(font)
+                .text_color(t.cell_text)
+                .frame(egui::Frame::NONE)
+                .desired_width(inner.width())
+                .lock_focus(true),
+        )
+        .accessible_name(format!("Cell {}{}", column_label(ed.cell.col), ed.cell.row + 1));
     if !fresh && !output.has_focus() {
         // Clicked somewhere else (a menu, another panel): the edit is done.
         commit_edit(grid, view);

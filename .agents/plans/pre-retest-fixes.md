@@ -55,6 +55,8 @@ Do not represent Windows/headless checks as Linux/macOS runtime verification.
 ## Progress
 
 - Planning: finalized; baseline evidence is in the linked audit.
-- Implementation and regression verification: pending.
+- Accessible cell label: implemented. The permanent regression fails with the
+  production change removed; all 87 tests, fmt, clippy and native debug smoke pass.
+- Functional repairs: pending.
 - Release build and native clipboard smoke: pending.
 - Commits and pushes: required for each verified slice.
