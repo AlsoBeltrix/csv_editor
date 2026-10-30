@@ -4,13 +4,19 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
 
 ## Now
 
+- **Windows icon and installer requested 2026-10-30** after the owner accepted
+  the repaired Windows build ("good"). Proposed scope, tooling evidence and
+  verification: [Windows distribution plan](plans/windows-distribution.md).
+  Pending: owner approval of that new plan, then implement and verify the icon
+  and per-user Windows x64 MSI. No packaging code or assets changed yet.
+
 - **Workflow repairs complete 2026-10-30** (owner: "plan then fix"). Ctrl+V and
   the seven additional functional findings are fixed and pushed to `master`.
   All 110 tests and required checks pass; both debug and release executables pass
   actual Windows clipboard/Save/Undo/save-reopen testing. Build receipt, individual
   fixes, cut semantics and platform limits: [repair plan](plans/pre-retest-fixes.md).
-  Release: `target/release/csv-editor.exe`. Optional next step: owner pastes into
-  a representative file, saves and reopens it. No implementation work remains.
+  Release: `target/release/csv-editor.exe`. Owner accepted this build 2026-10-30
+  ("good"). No workflow-repair implementation work remains.
   Original evidence: [workflow audit](reviews/2026-10-30-workflows.md).
 
 - **CSV editor — plan implemented, accepted by the owner 2026-10-21 ("good enough")**
