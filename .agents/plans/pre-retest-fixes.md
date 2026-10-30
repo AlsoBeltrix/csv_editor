@@ -60,6 +60,9 @@ Do not represent Windows/headless checks as Linux/macOS runtime verification.
 - F1: implemented; five document-transition regressions fail with the fix removed.
   All 92 tests, fmt, clippy, build and native debug smoke pass. Edits commit to
   their owner before switching/opening/creating/closing or saving another tab.
-- Remaining functional repairs: F2–F7 and native clipboard support.
+- F2: implemented; both unsafe close paths fail with the fix removed, and the
+  clean-document close control passes. All 95 tests and the full entry point,
+  including native debug smoke, pass.
+- Remaining functional repairs: F3–F7 and native clipboard support.
 - Release build and native clipboard smoke: pending.
 - Commits and pushes: required for each verified slice.

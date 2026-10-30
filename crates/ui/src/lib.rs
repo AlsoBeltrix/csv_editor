@@ -300,14 +300,15 @@ impl EditorApp {
         if !dialog_open && self.grid.editor.is_none() {
             self.shortcuts(ctx);
         }
-        if ctx.input(|i| i.viewport().close_requested())
-            && !self.quit_confirmed
-            && self.prompt.is_none()
-            && let Some(i) = self.docs.iter().position(|d| d.doc.is_dirty())
-        {
-            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-            self.activate_document(i);
-            self.prompt = Some(Prompt::Quit);
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed {
+            self.commit_active_edit();
+            if self.prompt.is_some() {
+                ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            } else if let Some(i) = self.docs.iter().position(|d| d.doc.is_dirty()) {
+                ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+                self.activate_document(i);
+                self.prompt = Some(Prompt::Quit);
+            }
         }
         let title = match self.active_view() {
             Some(v) => format!("{}{} - CSV Editor", v.doc.display_name(), if v.doc.is_dirty() { "*" } else { "" }),

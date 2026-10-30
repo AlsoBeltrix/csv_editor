@@ -3,7 +3,7 @@
 
 use csv_editor_table::{Document, ParseOptions};
 use csv_editor_ui::{DocView, EditorApp, Services};
-use egui::{Event, Modifiers, PointerButton, vec2};
+use egui::{Event, Modifiers, PointerButton, ViewportCommand, ViewportEvent, ViewportId, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
 fn view(text: &str) -> DocView {
@@ -152,4 +152,57 @@ fn document_transition_saving_a_background_tab_keeps_the_active_edit() {
     assert_eq!(std::fs::read_to_string(&file.0).unwrap(), "background\r\n");
     assert_eq!(h.state().docs[1].doc.table.get(0, 0), "keep me");
     assert!(h.state().docs[1].doc.is_dirty());
+}
+
+fn close_request(h: &mut Harness<'_, EditorApp>) {
+    let info = h.input_mut().viewports.get_mut(&ViewportId::ROOT).unwrap();
+    info.events.clear();
+    info.events.push(ViewportEvent::Close);
+    h.step();
+    h.input_mut().viewports.get_mut(&ViewportId::ROOT).unwrap().events.clear();
+}
+
+fn command(h: &Harness<'_, EditorApp>, wanted: ViewportCommand) -> bool {
+    h.output().viewport_output.get(&ViewportId::ROOT).unwrap().commands.contains(&wanted)
+}
+
+#[test]
+fn close_guard_includes_the_active_cell_edit_and_allows_cancel() {
+    let mut h = harness(app("original\r\n"));
+    type_text(&mut h, "unsaved");
+    assert!(!h.state().docs[0].doc.is_dirty(), "the pending editor has not committed yet");
+    close_request(&mut h);
+    assert!(command(&h, ViewportCommand::CancelClose));
+    assert_eq!(h.state().docs[0].doc.table.get(0, 0), "unsaved");
+    h.run();
+    h.get_by_label("Cancel").click();
+    h.run();
+    assert!(h.state().docs[0].doc.is_dirty());
+    assert!(!command(&h, ViewportCommand::Close));
+}
+
+#[test]
+fn close_guard_handles_repeated_window_and_tab_close_prompts() {
+    for tab_prompt in [false, true] {
+        let mut a = app("original\r\n");
+        a.docs[0].doc.set_cell(0, 0, "unsaved");
+        let mut h = harness(a);
+        if tab_prompt {
+            h.state_mut().request_close(0);
+        } else {
+            close_request(&mut h);
+            assert!(command(&h, ViewportCommand::CancelClose));
+        }
+        h.run();
+        close_request(&mut h);
+        assert!(command(&h, ViewportCommand::CancelClose), "an existing prompt must protect every close request");
+        assert!(h.state().docs[0].doc.is_dirty());
+    }
+}
+
+#[test]
+fn close_guard_allows_an_unchanged_document_to_close() {
+    let mut h = harness(app("original\r\n"));
+    close_request(&mut h);
+    assert!(!command(&h, ViewportCommand::CancelClose));
 }
