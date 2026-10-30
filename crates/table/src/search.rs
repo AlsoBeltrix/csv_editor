@@ -50,8 +50,8 @@ impl Matcher {
 }
 
 /// Cells of `scope` in reading order, starting after `from` (or before it, backwards) and
-/// wrapping around; `visible` says which rows take part (filtered-out rows are skipped).
-fn walk(table: &Table, scope: Range, from: Option<CellRef>, forward: bool, visible: &dyn Fn(usize) -> bool) -> impl Iterator<Item = CellRef> {
+/// wrapping around; `included` excludes hidden rows and gaps between selected ranges.
+fn walk(table: &Table, scope: Range, from: Option<CellRef>, forward: bool, included: &dyn Fn(CellRef) -> bool) -> impl Iterator<Item = CellRef> {
     let last_row = scope.end.row.min(table.row_count().saturating_sub(1));
     let (r0, r1, c0, c1) = (scope.start.row, last_row, scope.start.col, scope.end.col);
     let cols = c1.saturating_sub(c0) + 1;
@@ -75,17 +75,24 @@ fn walk(table: &Table, scope: Range, from: Option<CellRef>, forward: bool, visib
             let i = if forward { (start + k) % total } else { (start + total - k % total) % total };
             CellRef::new(r0 + i / cols, c0 + i % cols)
         })
-        .filter(move |c| visible(c.row))
+        .filter(move |c| included(*c))
 }
 
 /// The next matching cell after `from` within `scope`, wrapping around; `None` without a match.
-pub fn find_next(table: &Table, m: &Matcher, scope: Range, from: Option<CellRef>, forward: bool, visible: &dyn Fn(usize) -> bool) -> Option<CellRef> {
-    walk(table, scope, from, forward, visible).find(|c| m.is_match(table.get(c.row, c.col)))
+pub fn find_next(
+    table: &Table,
+    m: &Matcher,
+    scope: Range,
+    from: Option<CellRef>,
+    forward: bool,
+    included: &dyn Fn(CellRef) -> bool,
+) -> Option<CellRef> {
+    walk(table, scope, from, forward, included).find(|c| m.is_match(table.get(c.row, c.col)))
 }
 
 /// How many cells in `scope` match, stopping at `cap`.
-pub fn count_matches(table: &Table, m: &Matcher, scope: Range, cap: usize, visible: &dyn Fn(usize) -> bool) -> usize {
-    walk(table, scope, None, true, visible).filter(|c| m.is_match(table.get(c.row, c.col))).take(cap).count()
+pub fn count_matches(table: &Table, m: &Matcher, scope: Range, cap: usize, included: &dyn Fn(CellRef) -> bool) -> usize {
+    walk(table, scope, None, true, included).filter(|c| m.is_match(table.get(c.row, c.col))).take(cap).count()
 }
 
 impl Document {
@@ -98,9 +105,9 @@ impl Document {
     }
 
     /// Replaces every match in `scope` as one undo step. Returns the number of cells changed.
-    pub fn replace_all(&mut self, m: &Matcher, replacement: &str, scope: Range, visible: &dyn Fn(usize) -> bool) -> usize {
+    pub fn replace_all(&mut self, m: &Matcher, replacement: &str, scope: Range, included: &dyn Fn(CellRef) -> bool) -> usize {
         let mut changes = Vec::new();
-        for c in walk(&self.table, scope, None, true, visible) {
+        for c in walk(&self.table, scope, None, true, included) {
             if let Some(text) = m.replace(self.table.get(c.row, c.col), replacement) {
                 changes.push((c.row, c.col, Cell::from(text)));
             }
@@ -119,7 +126,7 @@ mod tests {
         Document::from_bytes(b"name,note\nAnn,apple pie\nBob,Pineapple\nCy,none\n", &ParseOptions::default()).unwrap()
     }
 
-    fn all(_: usize) -> bool {
+    fn all(_: CellRef) -> bool {
         true
     }
 
@@ -157,7 +164,7 @@ mod tests {
         assert_eq!(find_next(&d.table, &m, scope, Some(first), false, &all), Some(second), "backwards wraps too");
         assert_eq!(count_matches(&d.table, &m, scope, 100, &all), 2);
         assert_eq!(count_matches(&d.table, &m, scope, 1, &all), 1, "the cap stops the count");
-        let only_row_2 = |r: usize| r == 2;
+        let only_row_2 = |c: CellRef| c.row == 2;
         assert_eq!(find_next(&d.table, &m, scope, None, true, &only_row_2), Some(second));
         assert_eq!(find_next(&d.table, &m, Range::cell(CellRef::new(0, 0)), None, true, &all), None);
     }

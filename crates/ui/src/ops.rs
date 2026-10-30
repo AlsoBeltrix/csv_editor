@@ -376,8 +376,8 @@ pub fn whole_body(view: &DocView) -> Range {
 }
 
 /// Where a cleanup tool works: the selection when more than one cell is selected, else everything.
-fn scope(view: &DocView) -> Range {
-    if view.sel.is_single_cell() { whole_body(view) } else { view.sel.bounds() }
+fn scopes(view: &DocView) -> Vec<Range> {
+    if view.sel.is_single_cell() { vec![whole_body(view)] } else { view.sel.ranges.clone() }
 }
 
 fn note(grid: &mut GridState, n: usize, what: &str, verb: &str) {
@@ -386,14 +386,14 @@ fn note(grid: &mut GridState, n: usize, what: &str, verb: &str) {
 
 pub fn trim_whitespace(grid: &mut GridState, view: &mut DocView) -> usize {
     grid::commit_edit(grid, view);
-    let n = view.doc.trim_whitespace(scope(view));
+    let n = view.doc.trim_whitespace_in(&scopes(view));
     note(grid, n, "cells", "trimmed");
     n
 }
 
 pub fn change_case(grid: &mut GridState, view: &mut DocView, case: Case) -> usize {
     grid::commit_edit(grid, view);
-    let n = view.doc.change_case(scope(view), case);
+    let n = view.doc.change_case_in(&scopes(view), case);
     note(grid, n, "cells", "changed");
     n
 }

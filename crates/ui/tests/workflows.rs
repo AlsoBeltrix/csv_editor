@@ -1,8 +1,8 @@
 //! Regression coverage for document transitions and native-window decisions.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use csv_editor_table::{CellRef, Document, ParseOptions, Range, Selection};
-use csv_editor_ui::{DocView, EditorApp, Services, ops};
+use csv_editor_table::{Case, CellRef, Document, ParseOptions, Range, Selection};
+use csv_editor_ui::{DocView, EditorApp, Filter, FilterKind, Services, find::Scope, ops};
 use egui::{Event, Modifiers, PointerButton, ViewportCommand, ViewportEvent, ViewportId, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
@@ -264,4 +264,87 @@ fn cut_guard_same_document_overlap_moves_once_and_undo_restores_it() {
     assert!(ops::paste(&mut a.grid, &mut a.docs[0], Some(text)));
     assert_eq!(String::from_utf8(a.docs[0].doc.to_bytes().0).unwrap(), ",1,2\r\n1,2,\r\n");
     assert_eq!(a.docs[0].doc.history.undo_label(), Some("Paste"));
+}
+
+fn disconnected_columns(view: &mut DocView) {
+    view.sel = Selection::at(CellRef::new(0, 0));
+    view.sel.add(Range::cell(CellRef::new(0, 2)), CellRef::new(0, 2));
+}
+
+#[test]
+fn selection_scope_find_and_replace_preserve_gaps_and_undo_once() {
+    let mut a = app("x,x,x\r\n");
+    disconnected_columns(&mut a.docs[0]);
+    a.find.scope = Some(Scope::Selection);
+    a.find.opts.query = "x".to_owned();
+    a.find.replacement = "y".to_owned();
+    assert!(a.find.next(&mut a.grid, &mut a.docs[0], true));
+    assert_eq!(a.docs[0].sel.active, CellRef::new(0, 0));
+    assert!(a.find.next(&mut a.grid, &mut a.docs[0], true));
+    assert_eq!(a.docs[0].sel.active, CellRef::new(0, 2), "Find must skip the unselected middle cell");
+    a.find.replace_all(&mut a.grid, &mut a.docs[0]);
+    assert_eq!(String::from_utf8(a.docs[0].doc.to_bytes().0).unwrap(), "y,x,y\r\n");
+    assert_eq!(a.find.status, "2 replaced");
+    a.docs[0].doc.undo();
+    assert!(!a.docs[0].doc.is_dirty());
+    assert_eq!(String::from_utf8(a.docs[0].doc.to_bytes().0).unwrap(), "x,x,x\r\n");
+}
+
+#[test]
+fn selection_scope_cleanup_preserves_gaps_and_combines_overlaps() {
+    let mut a = app(" x , x , x \r\n");
+    disconnected_columns(&mut a.docs[0]);
+    assert_eq!(ops::trim_whitespace(&mut a.grid, &mut a.docs[0]), 2);
+    assert_eq!(String::from_utf8(a.docs[0].doc.to_bytes().0).unwrap(), "x, x ,x\r\n");
+    a.docs[0].doc.undo();
+    assert!(!a.docs[0].doc.is_dirty());
+    assert_eq!(ops::change_case(&mut a.grid, &mut a.docs[0], Case::Upper), 2);
+    assert_eq!(String::from_utf8(a.docs[0].doc.to_bytes().0).unwrap(), " X , x , X \r\n");
+    a.docs[0].doc.undo();
+    a.docs[0].sel = Selection::range(Range::new(CellRef::new(0, 0), CellRef::new(0, 1)));
+    a.docs[0].sel.add(Range::new(CellRef::new(0, 1), CellRef::new(0, 2)), CellRef::new(0, 2));
+    assert_eq!(ops::trim_whitespace(&mut a.grid, &mut a.docs[0]), 3, "overlapping cells count only once");
+    a.docs[0].doc.undo();
+    assert_eq!(String::from_utf8(a.docs[0].doc.to_bytes().0).unwrap(), " x , x , x \r\n");
+    assert!(!a.docs[0].doc.is_dirty());
+}
+
+#[test]
+fn selection_scope_counts_follow_selection_document_and_filter_changes() {
+    let mut a = app("x,x,x\r\n");
+    disconnected_columns(&mut a.docs[0]);
+    a.find.scope = Some(Scope::Selection);
+    a.find.opts.query = "x".to_owned();
+    a.find.show(false);
+    let mut h = harness(a);
+    h.get_by_label("2 matches");
+    h.state_mut().docs[0].sel = Selection::at(CellRef::new(0, 0));
+    h.run();
+    h.get_by_label("1 match");
+    h.state_mut().find.scope = Some(Scope::All);
+    h.run();
+    h.get_by_label("3 matches");
+    h.state_mut().docs.push(view("x,no,no\r\n"));
+    h.state_mut().active = 1;
+    h.run();
+    h.get_by_label("1 match");
+    h.state_mut().docs[1].set_filter(Filter { col: 0, kind: FilterKind::Equals, text: "missing".into() });
+    h.run();
+    h.get_by_label("0 matches");
+}
+
+#[test]
+fn selection_scope_replace_skips_filtered_rows_and_overlaps() {
+    let mut a = app("keep,x,x\r\nhide,x,x\r\n");
+    a.docs[0].sel = Selection::range(Range::new(CellRef::new(0, 1), CellRef::new(1, 1)));
+    a.docs[0].sel.add(Range::new(CellRef::new(0, 1), CellRef::new(1, 2)), CellRef::new(1, 2));
+    a.docs[0].set_filter(Filter { col: 0, kind: FilterKind::Equals, text: "keep".into() });
+    a.find.scope = Some(Scope::Selection);
+    a.find.opts.query = "x".to_owned();
+    a.find.replacement = "xx".to_owned();
+    a.find.replace_all(&mut a.grid, &mut a.docs[0]);
+    assert_eq!(a.find.status, "2 replaced");
+    assert_eq!(String::from_utf8(a.docs[0].doc.to_bytes().0).unwrap(), "keep,xx,xx\r\nhide,x,x\r\n");
+    a.docs[0].doc.undo();
+    assert_eq!(String::from_utf8(a.docs[0].doc.to_bytes().0).unwrap(), "keep,x,x\r\nhide,x,x\r\n");
 }

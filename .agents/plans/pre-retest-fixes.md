@@ -66,6 +66,10 @@ Do not represent Windows/headless checks as Linux/macOS runtime verification.
 - F3: implemented; cross-document and stale-cut regressions fail with the fix
   removed; overlapping moves and one-step undo also pass. Source identity survives
   tab reordering and closing. All 98 tests and the full entry point/debug smoke pass.
-- Remaining functional repairs: F4–F7 and native clipboard support.
+- F4: implemented; targeted regressions demonstrate the old selection failures.
+  Find/count/replace honor the selected cells and current filters; cleanup merges
+  overlapping spans and preserves gaps in one undo step. The Search scope control
+  is named for accessibility. All 102 tests and the full entry point/debug smoke pass.
+- Remaining functional repairs: F5–F7 and native clipboard support.
 - Release build and native clipboard smoke: pending.
 - Commits and pushes: required for each verified slice.

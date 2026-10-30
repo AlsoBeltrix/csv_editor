@@ -87,17 +87,32 @@ impl Document {
     /// Rewrites every existing cell of `scope` with `f` (`None`: leave the cell alone), as one
     /// undo step named `label`. Returns how many cells changed.
     pub fn map_cells(&mut self, scope: Range, label: &str, f: impl Fn(&str) -> Option<String>) -> usize {
+        self.map_cells_in(&[scope], label, f)
+    }
+
+    /// Rewrites selected cells once each, preserving gaps and combining overlaps.
+    pub fn map_cells_in(&mut self, scopes: &[Range], label: &str, f: impl Fn(&str) -> Option<String>) -> usize {
         let table = &self.table;
         let mut changes = Vec::new();
-        for r in scope.rows().take_while(|&r| r < table.row_count()) {
+        let start = scopes.iter().map(|s| s.start.row).min().unwrap_or(0);
+        let end = scopes.iter().map(|s| s.end.row.saturating_add(1)).max().unwrap_or(0).min(table.row_count());
+        let mut spans = Vec::new();
+        for r in start..end {
             let Some(row) = table.row(r) else { break };
-            for c in scope.cols().take_while(|&c| c < row.len()) {
-                let old = table.get(r, c);
-                if let Some(new) = f(old)
-                    && new != old
-                {
-                    changes.push((r, c, Cell::from(new)));
+            spans.clear();
+            spans.extend(scopes.iter().filter(|s| s.rows().contains(&r)).map(|s| (s.start.col, s.end.col.saturating_add(1).min(row.len()))));
+            spans.sort_unstable();
+            let mut visited = 0;
+            for &(start, end) in &spans {
+                for c in start.max(visited)..end {
+                    let old = table.get(r, c);
+                    if let Some(new) = f(old)
+                        && new != old
+                    {
+                        changes.push((r, c, Cell::from(new)));
+                    }
                 }
+                visited = visited.max(end);
             }
         }
         let n = changes.len();
@@ -105,14 +120,22 @@ impl Document {
     }
 
     pub fn trim_whitespace(&mut self, scope: Range) -> usize {
-        self.map_cells(scope, "Trim whitespace", |s| {
+        self.trim_whitespace_in(&[scope])
+    }
+
+    pub fn trim_whitespace_in(&mut self, scopes: &[Range]) -> usize {
+        self.map_cells_in(scopes, "Trim whitespace", |s| {
             let t = s.trim();
             (t.len() != s.len()).then(|| t.to_string())
         })
     }
 
     pub fn change_case(&mut self, scope: Range, case: Case) -> usize {
-        self.map_cells(scope, case.label(), |s| case.apply_if_changed(s))
+        self.change_case_in(&[scope], case)
+    }
+
+    pub fn change_case_in(&mut self, scopes: &[Range], case: Case) -> usize {
+        self.map_cells_in(scopes, case.label(), |s| case.apply_if_changed(s))
     }
 
     /// Deletes body rows whose cells are all blank. Returns how many.
