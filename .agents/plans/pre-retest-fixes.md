@@ -46,9 +46,9 @@ clipboard coverage must exercise external text to grid, grid to external
 clipboard, and tab-separated multiline data; synthetic paste events alone
 cannot verify that integration.
 
-After the repairs, build the release executable and run one integrated Windows
-smoke covering paste, active-cell Save, tab changes, selection operations, undo,
-save/reopen and quit decisions. Give the owner one rebuilt executable and a short
+After the repairs, build the release executable and run the native Windows
+clipboard/active-cell Save/undo/save-reopen smoke. The permanent Windows UI harness
+covers tab changes, selection operations and quit decisions. Give the owner one rebuilt executable and a short
 final smoke checklist; automated regressions should cover the defect variants.
 Do not represent Windows/headless checks as Linux/macOS runtime verification.
 
@@ -83,6 +83,9 @@ Do not represent Windows/headless checks as Linux/macOS runtime verification.
   copy/cut, including normalized clipboard line endings. The regression fails
   with the fix removed; the foreign-text control passes. All 110 tests and the
   full entry point/debug smoke pass.
-- Remaining functional repair: native clipboard support.
-- Release build and native clipboard smoke: pending.
+- Native clipboard: implemented; the feature graph includes the OS bridge, all
+  110 tests and the full verification entry point pass. The committed native
+  Windows keyboard test fails on the old binary and passes on the rebuilt debug
+  binary, covering external copy/paste, in-cell Save, cut/move/undo and save/reopen.
+- Release build and release native keyboard smoke: in progress.
 - Commits and pushes: required for each verified slice.

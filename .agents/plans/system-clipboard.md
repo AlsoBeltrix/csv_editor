@@ -1,6 +1,7 @@
 # Plan: restore system clipboard shortcuts
 
-Status: approved 2026-10-30 ("plan then fix") as part of the consolidated repairs.
+Status: implemented and verified 2026-10-30 as part of the consolidated repairs.
+Release closeout is tracked in [pre-retest-fixes.md](pre-retest-fixes.md).
 
 ## Finding
 
@@ -37,3 +38,14 @@ pending. See the [workflow audit](../reviews/2026-10-30-workflows.md) and
 
 No new synthetic paste test is proposed: the existing test already covers the
 grid operation, while this defect is in the native integration feature set.
+
+## Verification receipt
+
+The resolved feature graph now enables `eframe/clipboard`, `egui-winit/clipboard`
+and its native backends. All 110 workspace tests, fmt, clippy and native debug
+launch passed. `tests/windows_clipboard.ps1` failed on the old executable at the
+external Ctrl+V assertion and passes on the rebuilt debug executable: external
+multiline paste, external copy, Save during an active edit, cut/paste, one-step
+undo and reopening the saved CSV (including leading zeros). Clipboard contents
+and preferences are preserved by the test. The added lockfile entries support
+the clipboard feature on other platforms; Linux/macOS runtime checks remain unrun.

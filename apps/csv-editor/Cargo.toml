@@ -13,7 +13,8 @@ workspace = true
 [dependencies]
 csv-editor-table = { workspace = true }
 csv-editor-ui = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+# Defaults are disabled in the workspace; clipboard is required for native Ctrl+C/X/V.
+eframe = { workspace = true, features = ["clipboard", "default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
