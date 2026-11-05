@@ -29,3 +29,13 @@ when the paste lands, provided the source is still open and unchanged since the 
 edited source still gets a copy and a status note, so a paste can never erase cells the cut did
 not see. Per-document histories stay separate: undoing the paste does not undo the cut in the
 other tab. Plan: slice 12 of `plans/csv-editor.md`.
+
+## 2026-11-05 — No Windows installer; a web app is the likely next phase; one icon at every size
+
+Owner: "pass on the installer for now. I think I'm going to make this a web app to host
+internally, but that's a later phase. the icon needs to scale from favicon to whatever size is
+needed." The MSI, static-runtime and installation-test parts of `plans/windows-distribution.md`
+are deferred indefinitely. The icon remains wanted, and its requirement is now explicit: a single
+design that reads at favicon size (16 px) and scales to any size the desktop or a browser asks
+for (window and taskbar, executable, web manifest). The web app is not planned yet; nothing in
+the codebase should assume it, but the icon assets should serve it when it comes.

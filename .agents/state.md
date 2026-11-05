@@ -14,11 +14,12 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
   (112 tests). Landed on `master` (`fb9177b`) and pushed. Owner re-tested the release
   build with two files open 2026-11-05: "works correctly now". Nothing pending.
 
-- **Windows icon and installer requested 2026-10-30** after the owner accepted
-  the repaired Windows build ("good"). Proposed scope, tooling evidence and
-  verification: [Windows distribution plan](plans/windows-distribution.md).
-  Pending: owner approval of that new plan, then implement and verify the icon
-  and per-user Windows x64 MSI. No packaging code or assets changed yet.
+- **Installer deferred 2026-11-05** ("pass on the installer for now"); the owner expects
+  to make this an internally hosted web app in a later phase (`decisions.md`). The icon
+  is still wanted and must scale from favicon (16 px) to any size needed. Pending: owner
+  go on an icon slice (proposal given in chat 2026-11-05; to be written into
+  `plans/csv-editor.md` on go). The old packaging plan,
+  [Windows distribution](plans/windows-distribution.md), keeps the tooling evidence.
 
 - **Workflow repairs complete 2026-10-30** (owner: "plan then fix"). Ctrl+V and
   the seven additional functional findings are fixed and pushed to `master`.

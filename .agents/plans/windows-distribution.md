@@ -1,9 +1,12 @@
 # Plan: Windows icon and installer
 
-Status: proposed 2026-10-30; awaiting approval for this new scope. The owner
-accepted the workflow repairs ("good") and requested an icon and installer.
-Implementation will land directly on `master` in verified slices, with each
-commit pushed under the existing push policy.
+Status: installer deferred 2026-11-05 ("pass on the installer for now"; a web app
+hosted internally is the likely later phase, see `../decisions.md`). Sections 2 and 3
+below (MSI, static runtime, installation checks) are not approved and not started.
+The icon (section 1) is still wanted and must scale from favicon size to any size
+needed; it is planned separately in `csv-editor.md` when the owner says go.
+Drafted 2026-10-30 after the owner accepted the workflow repairs ("good") and
+requested an icon and installer.
 
 ## Scope and defaults
 
