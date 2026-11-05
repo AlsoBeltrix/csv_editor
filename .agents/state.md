@@ -11,7 +11,8 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
   document's own "Cut" undo step (`EditorApp::complete_cut`, `Document::cut_out`,
   `GridState::cut_request`); a closed or edited source still receives a copy with a status
   note. Same-document moves unchanged. Verification entry point and debug smoke pass
-  (112 tests). Landed on `master` and pushed. Next: owner re-test with two files open.
+  (112 tests). Landed on `master` (`fb9177b`) and pushed. Owner re-tested the release
+  build with two files open 2026-11-05: "works correctly now". Nothing pending.
 
 - **Windows icon and installer requested 2026-10-30** after the owner accepted
   the repaired Windows build ("good"). Proposed scope, tooling evidence and
