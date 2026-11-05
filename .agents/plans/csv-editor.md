@@ -277,6 +277,34 @@ Tests: `cut_guard_other_documents_receive_an_undoable_copy` becomes
 edited source (copy, note, nothing erased); a harness test drives Ctrl+X, a tab switch and
 Ctrl+V through real events.
 
+## Slice 13: application icon (design chosen 2026-11-05, awaiting go)
+
+Owner, after three rendered candidates: "first one is good" (A, a green document with a
+folded corner, a white grid and one amber highlighted cell). Requirement from `decisions.md`
+(2026-11-05): one design that scales from favicon size to whatever size the desktop or a
+browser asks for; no installer.
+
+Design:
+- `assets/icon/icon.py` is the editable source: the geometry in a unit square, rendered with
+  8× supersampling. Sizes of 24 px and under use the simplified form (2×2 grid, thicker lines).
+  It writes every committed asset; builds never run it. Python with Pillow is the only tool.
+- Committed outputs: `csv-editor.svg` (the same geometry as vector paths, for browsers and
+  any future size), `csv-editor-{16,24,32,48,64,128,256,512}.png`, `csv-editor.ico` (16 to
+  256, each size rendered separately, not downscaled) and `favicon.ico` (16, 32, 48). A
+  contact sheet (`contact-sheet.png`) shows every size on light and dark for review.
+- Window and taskbar icon on every platform: `ViewportBuilder::with_icon` from the 256 px
+  PNG, decoded at start-up with the `image` crate the app already uses.
+- Windows executable icon and version metadata (product name, version from Cargo,
+  description): a `build.rs` in `apps/csv-editor` using `winresource`, guarded by
+  `cfg(target_os = "windows")` so Linux and macOS builds are untouched. If the Windows SDK's
+  resource compiler is not found on this machine, the step is reported, not worked around.
+- Not in scope: `.csv` file association, installer, signing, web manifest (the PNG and SVG
+  sizes it would need are already produced).
+
+Verification: the entry point; a test that the embedded PNG decodes to a square 256 px image;
+a `PrintWindow` capture of the running window showing the icon in the title bar and the
+taskbar; the contact sheet inspected at 16 px.
+
 ## Follow-ups (not started)
 
 - Parse in parallel (split at record boundaries outside quotes) for files past a few hundred MB.

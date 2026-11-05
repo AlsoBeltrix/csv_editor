@@ -39,3 +39,10 @@ are deferred indefinitely. The icon remains wanted, and its requirement is now e
 design that reads at favicon size (16 px) and scales to any size the desktop or a browser asks
 for (window and taskbar, executable, web manifest). The web app is not planned yet; nothing in
 the codebase should assume it, but the icon assets should serve it when it comes.
+
+## 2026-11-05 — Icon design: green document with folded corner
+
+Shown three candidates rendered from 16 to 256 px on light and dark (document with fold; app
+tile; table card), the owner chose the first: "first one is good". Green sheet, folded corner in
+lighter green, white 3×3 grid with one amber cell; 2×2 grid at 24 px and under. Plan: slice 13 of
+`plans/csv-editor.md`.

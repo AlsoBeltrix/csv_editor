@@ -16,10 +16,11 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
 
 - **Installer deferred 2026-11-05** ("pass on the installer for now"); the owner expects
   to make this an internally hosted web app in a later phase (`decisions.md`). The icon
-  is still wanted and must scale from favicon (16 px) to any size needed. Pending: owner
-  go on an icon slice (proposal given in chat 2026-11-05; to be written into
-  `plans/csv-editor.md` on go). The old packaging plan,
-  [Windows distribution](plans/windows-distribution.md), keeps the tooling evidence.
+  is still wanted and must scale from favicon (16 px) to any size needed. Design chosen
+  2026-11-05 ("first one is good": green document with folded corner, `decisions.md`);
+  slice 13 of `plans/csv-editor.md` is written. Pending: owner go on implementing slice 13.
+  The old packaging plan, [Windows distribution](plans/windows-distribution.md), keeps the
+  tooling evidence.
 
 - **Workflow repairs complete 2026-10-30** (owner: "plan then fix"). Ctrl+V and
   the seven additional functional findings are fixed and pushed to `master`.
