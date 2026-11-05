@@ -277,7 +277,7 @@ Tests: `cut_guard_other_documents_receive_an_undoable_copy` becomes
 edited source (copy, note, nothing erased); a harness test drives Ctrl+X, a tab switch and
 Ctrl+V through real events.
 
-## Slice 13: application icon (design chosen 2026-11-05, awaiting go)
+## Slice 13: application icon (design chosen 2026-11-05, owner go 2026-11-05, landed)
 
 Owner, after three rendered candidates: "first one is good" (A, a green document with a
 folded corner, a white grid and one amber highlighted cell). Requirement from `decisions.md`
@@ -304,6 +304,14 @@ Design:
 Verification: the entry point; a test that the embedded PNG decodes to a square 256 px image;
 a `PrintWindow` capture of the running window showing the icon in the title bar and the
 taskbar; the contact sheet inspected at 16 px.
+
+Landed 2026-11-05. The resource compiler was found (Windows SDK 10.0.26100) and the debug
+executable reports ProductName "CSV Editor", version 0.1.0 and an icon resource. The title-bar
+capture shows the icon; the taskbar capture came back blank on this 4096-px display (the
+strip was not where the script looked), so the taskbar is confirmed only through the window
+icon it is derived from. Pillow's ICO writer drops any size larger than the first image, so
+the ICO is written largest-first (the script checks the sizes it wrote). The app crate now has
+a `build.rs` (Windows only) and `src/icon.rs`; 113 tests.
 
 ## Follow-ups (not started)
 

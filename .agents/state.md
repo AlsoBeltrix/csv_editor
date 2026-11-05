@@ -18,7 +18,11 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
   to make this an internally hosted web app in a later phase (`decisions.md`). The icon
   is still wanted and must scale from favicon (16 px) to any size needed. Design chosen
   2026-11-05 ("first one is good": green document with folded corner, `decisions.md`);
-  slice 13 of `plans/csv-editor.md` is written. Pending: owner go on implementing slice 13.
+  slice 13 of `plans/csv-editor.md` landed the same day on owner go: `assets/icon/icon.py`
+  is the source, committed SVG/PNG/ICO assets, window icon on every platform
+  (`apps/csv-editor/src/icon.rs`), Windows executable icon and version metadata
+  (`apps/csv-editor/build.rs`, winresource). Entry point passes (113 tests); title-bar
+  icon confirmed by capture, taskbar not captured. Next: owner looks at the running app.
   The old packaging plan, [Windows distribution](plans/windows-distribution.md), keeps the
   tooling evidence.
 
@@ -99,6 +103,8 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
 - Measuring memory: `crates/table/examples/soak.rs` opens, saves and compares a file; peak
   working set and private bytes come from a PowerShell poller around the process (the script is
   in the session scratchpad; it is ten lines of `Process.Refresh()` in a loop).
+- Regenerating the icon assets: `python assets/icon/icon.py` (Pillow). Capturing the title bar
+  and executable metadata: `PrintWindow` on the main window, `(Get-Item exe).VersionInfo`.
 - Looking at the UI without a person: `='<path>.png'` then run the exe
   with a file argument; it saves the window after four frames and exits. Sample data for this
   lives in the session scratchpad, not the repo.

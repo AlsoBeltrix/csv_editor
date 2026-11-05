@@ -4,6 +4,7 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
 mod graphics;
+mod icon;
 mod prefs;
 
 use std::path::PathBuf;
@@ -115,12 +116,15 @@ fn main() -> eframe::Result {
         app.open_path(f);
     }
     let size = saved.window.filter(|[w, h]| w.is_finite() && h.is_finite() && *w >= 560.0 && *h >= 360.0).unwrap_or([1280.0, 800.0]);
-    let viewport = egui::ViewportBuilder::default()
+    let mut viewport = egui::ViewportBuilder::default()
         .with_title("CSV Editor")
         .with_inner_size(size)
         .with_min_inner_size([560.0, 360.0])
         .with_app_id("csv-editor")
         .with_drag_and_drop(true);
+    if let Some(icon) = icon::window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let mut options = eframe::NativeOptions { viewport, ..Default::default() };
     // Before eframe creates the wgpu instance: OpenGL on Windows, never DirectX or Vulkan unless
     // asked (see graphics.rs).
