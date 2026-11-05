@@ -249,6 +249,34 @@ growth; trim with nothing to trim 0.09 s; "contains" filter over a column 0.09 s
 needle (about the same as before for a non-ASCII one, which still lowercases). Remove
 duplicates is 1.7 s on 1.36 M rows (hashing every cell) and was left alone.
 
+## Slice 12: a cut pasted into another document moves (owner go 2026-11-05)
+
+Owner: "cut and ctrl-x doesn't cut, it just copies when cutting from one file to another open
+file." The 2026-10-30 repair (F3 in `pre-retest-fixes.md`) had made a cross-document cut paste a
+copy with a status note, because `ops::paste` only has the active document in hand. Reversed in
+`decisions.md` (2026-11-05).
+
+Design:
+- `ops::paste` keeps deciding what lands in the target. When the clipboard's cut came from
+  another document it no longer writes the note; it leaves the `Cut` (document identity, history
+  version, range) in `GridState::cut_request` after the paste succeeds.
+- `EditorApp::complete_cut`, run from `logic` every frame, drains the request: if the source
+  document is still open and its history version is the one the cut recorded, it blanks the
+  range there through `Document::cut_out` as its own undo step named "Cut". Otherwise (closed, or
+  edited since the cut) nothing is erased and the status bar says the paste was a copy.
+- Same-document behaviour is unchanged: an unchanged source moves in one "Move" step; a changed
+  one pastes a copy with the note.
+- `Document::clear`, `paste` and `cut_out` share one `blank_edits` helper.
+
+Consequence accepted with the decision: histories are per document, so undo in the target
+restores the pasted cells while the source stays blank until its own undo. Excel behaves the
+same across workbooks.
+
+Tests: `cut_guard_other_documents_receive_an_undoable_copy` becomes
+`cut_moves_into_another_document_as_two_undo_steps`; a new test covers the closed and the
+edited source (copy, note, nothing erased); a harness test drives Ctrl+X, a tab switch and
+Ctrl+V through real events.
+
 ## Follow-ups (not started)
 
 - Parse in parallel (split at record boundaries outside quotes) for files past a few hundred MB.

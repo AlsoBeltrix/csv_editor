@@ -19,3 +19,13 @@ Asked whether a standard applies, the answer is RFC 4180: CRLF is the record sep
 also what Excel writes on Windows and macOS and what Python's csv module defaults to. Opened files
 keep their own line ending (sniffed, shown in the badge, written back unchanged) and the dialect
 dialog offers CRLF, LF and CR per file. No platform-dependent default.
+
+## 2026-11-05 — A cut pasted into another open document moves the cells
+
+Owner: "cut and ctrl-x doesn't cut, it just copies when cutting from one file to another open
+file." This reverses the 2026-10-30 repair choice (F3, `plans/pre-retest-fixes.md`) that made a
+cross-document cut paste a copy. The source document is blanked as its own undo step ("Cut")
+when the paste lands, provided the source is still open and unchanged since the cut; a closed or
+edited source still gets a copy and a status note, so a paste can never erase cells the cut did
+not see. Per-document histories stay separate: undoing the paste does not undo the cut in the
+other tab. Plan: slice 12 of `plans/csv-editor.md`.

@@ -4,6 +4,15 @@ Sole current-state entry point (AGENTS.md). Integration branch: `master`, pushed
 
 ## Now
 
+- **Cross-document cut moves (owner go 2026-11-05, "cut and ctrl-x doesn't cut, it just
+  copies when cutting from one file to another open file")**: slice 12 of
+  `plans/csv-editor.md`, reversing the F3 repair choice of 2026-10-30 (`decisions.md`).
+  A cut pasted into another open, unchanged document now empties its source as that
+  document's own "Cut" undo step (`EditorApp::complete_cut`, `Document::cut_out`,
+  `GridState::cut_request`); a closed or edited source still receives a copy with a status
+  note. Same-document moves unchanged. Verification entry point and debug smoke pass
+  (112 tests). Landed on `master` and pushed. Next: owner re-test with two files open.
+
 - **Windows icon and installer requested 2026-10-30** after the owner accepted
   the repaired Windows build ("good"). Proposed scope, tooling evidence and
   verification: [Windows distribution plan](plans/windows-distribution.md).

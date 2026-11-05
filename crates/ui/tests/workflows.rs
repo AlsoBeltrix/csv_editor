@@ -208,20 +208,60 @@ fn close_guard_allows_an_unchanged_document_to_close() {
 }
 
 #[test]
-fn cut_guard_other_documents_receive_an_undoable_copy() {
+fn cut_moves_into_another_document_as_two_undo_steps() {
     let mut a = app("source,keep\r\n");
     a.docs.push(view("precious,target\r\n"));
     ops::cut(&mut a.grid, &mut a.docs[0], &egui::Context::default());
     a.docs[1].sel = Selection::at(CellRef::new(0, 1));
     let text = a.grid.clip.as_ref().unwrap().text.clone();
     assert!(ops::paste(&mut a.grid, &mut a.docs[1], Some(text)));
+    // The paste lands at once; the source is emptied when the app completes the cut.
     assert_eq!((a.docs[1].doc.table.get(0, 0), a.docs[1].doc.table.get(0, 1)), ("precious", "source"));
     assert_eq!(a.docs[0].doc.table.get(0, 0), "source");
-    assert!(!a.docs[0].doc.is_dirty());
+    a.complete_cut();
+    assert_eq!((a.docs[0].doc.table.get(0, 0), a.docs[0].doc.table.get(0, 1)), ("", "keep"));
+    assert!(a.docs[0].doc.is_dirty());
+    assert!(a.grid.note.is_none(), "a completed move needs no explanation");
+    assert!(a.grid.clip.as_ref().unwrap().cut.is_none(), "a cut moves once");
+    // Each document undoes its own half.
     assert_eq!(a.docs[1].doc.undo().as_deref(), Some("Paste"));
     assert_eq!((a.docs[1].doc.table.get(0, 0), a.docs[1].doc.table.get(0, 1)), ("precious", "target"));
-    assert!(a.grid.note.as_deref().unwrap().contains("copy"));
-    assert!(a.grid.clip.as_ref().unwrap().cut.is_none());
+    assert_eq!(a.docs[0].doc.table.get(0, 0), "");
+    assert_eq!(a.docs[0].doc.undo().as_deref(), Some("Cut"));
+    assert_eq!(a.docs[0].doc.table.get(0, 0), "source");
+    assert!(!a.docs[0].doc.is_dirty());
+    // Pasting the same text again is a plain copy.
+    a.docs[1].sel = Selection::at(CellRef::new(0, 1));
+    let text = a.grid.clip.as_ref().unwrap().text.clone();
+    assert!(ops::paste(&mut a.grid, &mut a.docs[1], Some(text)));
+    a.complete_cut();
+    assert_eq!(a.docs[0].doc.table.get(0, 0), "source");
+}
+
+#[test]
+fn cut_guard_closed_or_edited_sources_in_other_documents_keep_their_cells() {
+    for close_source in [false, true] {
+        let mut a = app("source,keep\r\n");
+        a.docs.push(view("precious,target\r\n"));
+        ops::cut(&mut a.grid, &mut a.docs[0], &egui::Context::default());
+        if close_source {
+            a.close_document(0);
+        } else {
+            a.docs[0].doc.set_cell(0, 0, "new data");
+        }
+        let target = if close_source { 0 } else { 1 };
+        a.docs[target].sel = Selection::at(CellRef::new(0, 1));
+        let text = a.grid.clip.as_ref().unwrap().text.clone();
+        assert!(ops::paste(&mut a.grid, &mut a.docs[target], Some(text)));
+        a.complete_cut();
+        assert_eq!((a.docs[target].doc.table.get(0, 0), a.docs[target].doc.table.get(0, 1)), ("precious", "source"));
+        if !close_source {
+            assert_eq!(a.docs[0].doc.table.get(0, 0), "new data");
+        }
+        assert_eq!(a.docs[target].doc.history.undo_label(), Some("Paste"));
+        assert!(a.grid.note.as_deref().unwrap().contains("copy"));
+        assert!(a.grid.clip.as_ref().unwrap().cut.is_none());
+    }
 }
 
 #[test]

@@ -44,7 +44,10 @@ pub fn cut(grid: &mut GridState, view: &mut DocView, ctx: &egui::Context) -> boo
 }
 
 /// Pastes `text` (what the system clipboard holds; read through the host when `None`). Text that
-/// matches the editor's own clipboard pastes those cells exactly, carrying a cut along.
+/// matches the editor's own clipboard pastes those cells exactly, carrying a cut along: a cut
+/// from this document (unchanged since) moves in one step; a cut from another document is left
+/// in `grid.cut_request` for the app to empty at its source; a cut from this document that has
+/// changed since pastes a copy.
 pub fn paste(grid: &mut GridState, view: &mut DocView, text: Option<String>) -> bool {
     grid::commit_edit(grid, view);
     let text = text.or_else(|| grid.paste_text.as_ref().and_then(|read| read()));
@@ -55,24 +58,31 @@ pub fn paste(grid: &mut GridState, view: &mut DocView, text: Option<String>) -> 
         (_, Some(t)) => (io::parse_block(t), None),
         (None, None) => return false,
     };
-    let source = cut.as_ref().filter(|cut| cut.document == view.id && cut.version == view.doc.history.version());
+    let same_document = cut.as_ref().is_some_and(|cut| cut.document == view.id);
+    let unchanged = cut.as_ref().is_some_and(|cut| cut.version == view.doc.history.version());
+    let source = if same_document && unchanged { cut.as_ref().map(|cut| cut.range) } else { None };
     let target = view.sel.current();
-    match view.doc.paste(target, &cells, source.map(|cut| cut.range)) {
+    match view.doc.paste(target, &cells, source) {
         Some(r) => {
             view.sel = Selection::range(r);
-            if cut.is_some() && source.is_none() {
-                grid.note = Some("Pasted a copy; the cut source is in another document or has changed.".to_string());
-            }
-            if cut.is_some()
-                && let Some(clip) = grid.clip.as_mut()
-            {
-                clip.cut = None;
+            if let Some(cut) = cut {
+                if !same_document {
+                    grid.cut_request = Some(cut);
+                } else if !unchanged {
+                    grid.note = Some(CUT_COPIED.to_string());
+                }
+                if let Some(clip) = grid.clip.as_mut() {
+                    clip.cut = None;
+                }
             }
             true
         }
         None => false,
     }
 }
+
+/// The status note when a cut's source could not be emptied.
+pub const CUT_COPIED: &str = "Pasted a copy; the cut source has changed or was closed.";
 
 // ----- Which rows and columns an operation means -------------------------------------------------
 

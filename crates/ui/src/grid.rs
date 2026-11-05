@@ -52,6 +52,10 @@ pub struct GridState {
     pub last_cells: Option<Rect>,
     /// The last copied or cut block, kept as cells so a paste within the editor is exact.
     pub clip: Option<Clip>,
+    /// A cut whose block was just pasted into a document other than its source. The paste
+    /// only has the active document in hand; the app empties the source
+    /// (`EditorApp::complete_cut`) if that document is still open and unchanged.
+    pub cut_request: Option<Cut>,
     /// Reads the system clipboard, for the menu's Paste (Ctrl+V arrives as an egui event).
     pub paste_text: Option<Rc<dyn Fn() -> Option<String>>>,
     drag: Option<Drag>,
@@ -74,10 +78,13 @@ pub struct Clip {
     /// The block as tab-separated text, as handed to the system clipboard.
     pub text: String,
     pub cells: Vec<Row>,
-    /// The source of a cut, emptied only when pasted into the unchanged source document.
+    /// The source of a cut, emptied when the block is pasted: in one step with the paste when
+    /// pasted into its own document, as that document's own "Cut" step when pasted into
+    /// another. A source edited or closed since the cut is left alone (the paste is a copy).
     pub cut: Option<Cut>,
 }
 
+/// Where a cut came from: the document, its history version at the time, and the range.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cut {
     pub(crate) document: DocumentId,
@@ -116,6 +123,7 @@ impl Default for GridState {
             drag: None,
             wheel: Vec2::ZERO,
             clip: None,
+            cut_request: None,
             paste_text: None,
             filter_request: None,
             scroll_to_active: false,

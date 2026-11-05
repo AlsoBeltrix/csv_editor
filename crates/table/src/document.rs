@@ -130,8 +130,9 @@ impl Document {
         self.apply("Typing", edit)
     }
 
-    /// Empties the cells in the ranges that exist (short rows are not padded).
-    pub fn clear(&mut self, ranges: &[Range]) -> bool {
+    /// The edits that empty the cells of `ranges` that exist and are not already empty (short
+    /// rows are not padded).
+    fn blank_edits(&self, ranges: &[Range]) -> Vec<Edit> {
         let mut edits = Vec::new();
         for r in ranges {
             for row in r.rows() {
@@ -143,7 +144,20 @@ impl Document {
                 edits.push(Edit::set_rect(row, r.start.col, vec![vec![Cell::default(); end - r.start.col + 1]]));
             }
         }
+        edits
+    }
+
+    /// Empties the cells in the ranges that exist.
+    pub fn clear(&mut self, ranges: &[Range]) -> bool {
+        let edits = self.blank_edits(ranges);
         self.apply("Clear", Edit::Batch(edits))
+    }
+
+    /// Empties the source of a cut whose paste landed in another document, as this document's
+    /// own undo step. (A paste into the same document moves in one step: see [`Document::paste`].)
+    pub fn cut_out(&mut self, source: Range) -> bool {
+        let edits = self.blank_edits(&[source]);
+        self.apply("Cut", Edit::Batch(edits))
     }
 
     /// Copies the range's first row into the rows below it (Ctrl+D).
@@ -305,16 +319,7 @@ impl Document {
         }
         let at = target.start;
         let end = CellRef::new(at.row + block.len() - 1, at.col + width * across - 1);
-        let mut edits = Vec::new();
-        if let Some(src) = cut {
-            for row in src.rows().filter(|r| *r < self.table.row_count()) {
-                let len = self.table.row(row).map_or(0, <[Cell]>::len);
-                if src.start.col < len {
-                    let count = src.end.col.min(len - 1) - src.start.col + 1;
-                    edits.push(Edit::set_rect(row, src.start.col, vec![vec![Cell::default(); count]]));
-                }
-            }
-        }
+        let mut edits = cut.map(|src| self.blank_edits(&[src])).unwrap_or_default();
         if let Some(grow) = self.grow_rows(end.row + 1) {
             edits.push(grow);
         }

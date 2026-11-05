@@ -172,6 +172,31 @@ fn copy_cut_and_paste_move_blocks_of_cells() {
 }
 
 #[test]
+fn cut_then_paste_in_another_tab_moves_the_cells() {
+    let mut h = harness(app("a,b\r\n1,2\r\n"));
+    h.state_mut().docs.push(DocView::new(Document::from_bytes(b"x,y\r\n", &ParseOptions::default()).unwrap()));
+    h.run();
+    press(&mut h, Key::ArrowDown);
+    press_with(&mut h, Modifiers::SHIFT, Key::ArrowRight);
+    h.input_mut().events.push(Event::Cut);
+    h.step();
+    let text = h.state().grid.clip.clone().expect("Ctrl+X fills the clipboard").text;
+    assert_eq!(text, "1\t2");
+    assert_eq!(cell(&h, 1, 0), "1", "a cut takes nothing until it is pasted");
+    h.state_mut().active = 1;
+    h.run();
+    press(&mut h, Key::ArrowDown);
+    h.input_mut().events.push(Event::Paste(text));
+    h.step();
+    h.run();
+    let other = |h: &Harness<'_, EditorApp>, r: usize, c: usize| h.state().docs[1].doc.table.get(r, c).to_string();
+    assert_eq!((other(&h, 1, 0), other(&h, 1, 1)), ("1".to_string(), "2".to_string()));
+    assert_eq!((cell(&h, 1, 0), cell(&h, 1, 1)), ("".to_string(), "".to_string()), "the source tab is emptied");
+    assert_eq!(h.state().docs[0].doc.history.undo_label(), Some("Cut"));
+    assert_eq!(h.state().docs[1].doc.history.undo_label(), Some("Paste"));
+}
+
+#[test]
 fn find_sort_and_filter_work_through_the_interface() {
     use csv_editor_ui::{Filter, FilterKind};
     let mut h = harness(app("name,city\r\nBob,Oslo\r\nAnn,Berlin\r\nCy,Oslo\r\nDee,Lisbon\r\n"));

@@ -239,6 +239,21 @@ impl EditorApp {
         if self.system_theme { ctx.system_theme().map(|t| t == egui::Theme::Dark).unwrap_or(self.dark) } else { self.dark }
     }
 
+    /// Finishes a cut whose block was pasted into another document (`grid.cut_request`): the
+    /// source cells are emptied as that document's own "Cut" step, provided the document is
+    /// still open and has not changed since the cut. Otherwise nothing is erased and the status
+    /// bar says the paste was a copy. Runs every frame from [`EditorApp::logic`].
+    pub fn complete_cut(&mut self) {
+        let Some(cut) = self.grid.cut_request.take() else { return };
+        let source = self.docs.iter_mut().find(|d| d.id == cut.document).filter(|d| d.doc.history.version() == cut.version);
+        match source {
+            Some(view) => {
+                view.doc.cut_out(cut.range);
+            }
+            None => self.grid.note = Some(ops::CUT_COPIED.to_string()),
+        }
+    }
+
     /// Per-frame state updates that are not drawing: theme, window title, global shortcuts,
     /// the quit guard.
     pub fn logic(&mut self, ctx: &egui::Context) {
@@ -267,6 +282,7 @@ impl EditorApp {
         if std::mem::take(&mut self.grid.goto_request) {
             self.goto = Some(String::new());
         }
+        self.complete_cut();
         if let Some(text) = self.grid.note.take() {
             self.note = Some((text, ctx.input(|i| i.time) + 5.0));
         }

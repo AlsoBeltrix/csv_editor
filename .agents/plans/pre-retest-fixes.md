@@ -25,6 +25,9 @@ Native clipboard finding and narrow repair:
    or stale cuts paste a copy, preserve the source, and explain this in the status
    bar; this avoids destructive cross-document undo coupling. Test overlap,
    cross-document paste, changed source and undo behavior.
+   Superseded 2026-11-05 for the cross-document case: an unchanged, still-open source is
+   now blanked as its own "Cut" step (`decisions.md`; slice 12 of `csv-editor.md`). Stale
+   and closed sources still paste a copy.
 4. F4: make replace/cleanup operate on the selected ranges, preserving gaps,
    avoiding duplicate edits where selections overlap, and retaining one undo step.
 5. F5: dispatch Save/Save As while a cell is being edited, committing the edit
